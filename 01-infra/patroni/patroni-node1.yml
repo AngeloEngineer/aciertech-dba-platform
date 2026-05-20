@@ -1,0 +1,169 @@
+
+# =============================================================================
+# AcierTech Industries — Configuration Patroni
+# Nœud : pg-node-1 (192.168.1.11) — Candidat primaire initial
+# INF1620 — Cluster PostgreSQL 16 Haute Disponibilité
+# =============================================================================
+ 
+scope: aciertech-cluster
+namespace: /patroni/
+name: pg-node-1
+ 
+# ---------------------------------------------------------------------------
+# Source de vérité distribuée : cluster etcd
+# ---------------------------------------------------------------------------
+etcd3:
+  hosts:
+    - 192.168.1.11:2379
+    - 192.168.1.12:2379
+    - 192.168.1.13:2379
+  protocol: http
+  # Durée maximale du TTL du lock leader (secondes)
+  # Si le leader ne renouvelle pas dans ce délai → failover déclenché
+  ttl: 30
+  loop_wait: 10
+  retry_timeout: 10
+ 
+# ---------------------------------------------------------------------------
+# API REST Patroni (utilisée par HAProxy pour les health checks)
+# GET /master  → 200 si ce nœud est primaire, 503 sinon
+# GET /replica → 200 si ce nœud est réplica actif, 503 sinon
+# ---------------------------------------------------------------------------
+restapi:
+  listen: 0.0.0.0:8008
+  connect_address: 192.168.1.11:8008
+  # Authentification de l'API REST (recommandé en production)
+  # authentication:
+  #   username: patroni
+  #   password: patroni_api_secret
+ 
+# ---------------------------------------------------------------------------
+# Bootstrap : configuration initiale du cluster (exécutée une seule fois)
+# ---------------------------------------------------------------------------
+bootstrap:
+  dcs:
+    # Délai (s) avant de déclarer un nœud mort et lancer le failover
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    # Lag maximum autorisé (en octets) pour qu'un réplica soit éligible au failover
+    maximum_lag_on_failover: 1048576  # 1 MB
+ 
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        # --- WAL & Archivage ---
+        wal_level: replica
+        archive_mode: "on"
+        archive_command: >-
+          pgbackrest --stanza=aciertech archive-push %p
+        archive_timeout: 300          # Archive forcée toutes les 5 min (RPO = 5 min)
+ 
+        # --- Réplication ---
+        max_wal_senders: 5
+        max_replication_slots: 5
+        wal_keep_size: 1GB
+        hot_standby: "on"
+        # Réplication synchrone : au moins 1 réplica doit confirmer avant commit
+        # Garantit RPO ≈ 0 sur les transactions validées
+        synchronous_commit: "on"
+        synchronous_standby_names: "ANY 1 (pg-node-2, pg-node-3)"
+ 
+        # --- Connexions & mémoire ---
+        max_connections: 200
+        shared_buffers: 128MB
+        effective_cache_size: 512MB
+        work_mem: 4MB
+        maintenance_work_mem: 64MB
+ 
+        # --- Logging (pour le monitoring et le debugging) ---
+        log_destination: stderr
+        logging_collector: "on"
+        log_directory: /var/log/postgresql
+        log_filename: postgresql-%Y-%m-%d.log
+        log_min_duration_statement: 1000   # Requêtes > 1s dans les logs
+        log_checkpoints: "on"
+        log_connections: "on"
+        log_disconnections: "on"
+        log_lock_waits: "on"
+        log_temp_files: 0
+ 
+        # --- Checkpoint & BGWriter ---
+        checkpoint_completion_target: 0.9
+        wal_buffers: 16MB
+ 
+  # Script d'initialisation exécuté sur le premier nœud primaire
+  initdb:
+    - encoding: UTF8
+    - data-checksums          # Détection de corruption disque
+ 
+  # Utilisateurs créés lors du bootstrap
+  users:
+    postgres:
+      password: postgres_strong_password_here
+      options:
+        - superuser
+    replicator:
+      password: replicator_strong_password_here
+      options:
+        - replication
+    aciertech_app:
+      password: app_strong_password_here
+      options:
+        - createdb
+ 
+  pg_hba:
+    - host replication replicator 192.168.1.0/24 md5
+    - host all all 192.168.1.0/24 md5
+    - host all all 127.0.0.1/32 md5
+    - local all all trust
+ 
+# ---------------------------------------------------------------------------
+# Configuration PostgreSQL locale (ce nœud uniquement)
+# ---------------------------------------------------------------------------
+postgresql:
+  listen: 0.0.0.0:5432
+  connect_address: 192.168.1.11:5432
+  data_dir: /var/lib/postgresql/16/main
+  bin_dir: /usr/lib/postgresql/16/bin
+  pgpass: /tmp/.pgpass_patroni
+ 
+  authentication:
+    replication:
+      username: replicator
+      password: replicator_strong_password_here
+    superuser:
+      username: postgres
+      password: postgres_strong_password_here
+    rewind:
+      username: postgres
+      password: postgres_strong_password_here
+ 
+  # Paramètres de récupération pour pg_rewind (rattrapage après failover)
+  recovery_conf:
+    recovery_target_timeline: latest
+ 
+  # Callbacks Patroni (scripts exécutés lors des transitions de rôle)
+  callbacks:
+    on_start: /opt/aciertech/scripts/patroni_on_start.sh
+    on_stop: /opt/aciertech/scripts/patroni_on_stop.sh
+    on_role_change: /opt/aciertech/scripts/patroni_on_role_change.sh
+ 
+# ---------------------------------------------------------------------------
+# Tags du nœud (influencent les décisions de failover)
+# ---------------------------------------------------------------------------
+tags:
+  # nofailover: false   → Ce nœud est éligible à devenir primaire
+  # noloadbalance: false → HAProxy peut y envoyer des lectures
+  # clonefrom: false    → Les réplicas peuvent cloner depuis ce nœud
+  nofailover: false
+  noloadbalance: false
+  clonefrom: false
+  nosync: false
+ 
+# =============================================================================
+# RAPPEL — Vérification rapide du cluster :
+#   patronictl -c /etc/patroni/patroni-node1.yml list
+#   patronictl -c /etc/patroni/patroni-node1.yml topology
+# =============================================================================

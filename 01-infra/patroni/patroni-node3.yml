@@ -1,0 +1,143 @@
+# =============================================================================
+# AcierTech Industries — Configuration Patroni
+# Nœud : pg-node-3 (192.168.1.13) — Réplica asynchrone / lectures seules
+# INF1620 — Cluster PostgreSQL 16 Haute Disponibilité
+# =============================================================================
+ 
+scope: aciertech-cluster
+namespace: /patroni/
+name: pg-node-3
+ 
+# ---------------------------------------------------------------------------
+# Source de vérité distribuée : cluster etcd
+# ---------------------------------------------------------------------------
+etcd3:
+  hosts:
+    - 192.168.1.11:2379
+    - 192.168.1.12:2379
+    - 192.168.1.13:2379
+  protocol: http
+  ttl: 30
+  loop_wait: 10
+  retry_timeout: 10
+ 
+# ---------------------------------------------------------------------------
+# API REST Patroni
+# ---------------------------------------------------------------------------
+restapi:
+  listen: 0.0.0.0:8008
+  connect_address: 192.168.1.13:8008
+ 
+# ---------------------------------------------------------------------------
+# Bootstrap (identique sur tous les nœuds)
+# ---------------------------------------------------------------------------
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+ 
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        wal_level: replica
+        archive_mode: "on"
+        archive_command: >-
+          pgbackrest --stanza=aciertech archive-push %p
+        archive_timeout: 300
+        max_wal_senders: 5
+        max_replication_slots: 5
+        wal_keep_size: 1GB
+        hot_standby: "on"
+        synchronous_commit: "on"
+        synchronous_standby_names: "ANY 1 (pg-node-2, pg-node-3)"
+        max_connections: 200
+        shared_buffers: 128MB
+        effective_cache_size: 512MB
+        work_mem: 4MB
+        maintenance_work_mem: 64MB
+        log_destination: stderr
+        logging_collector: "on"
+        log_directory: /var/log/postgresql
+        log_filename: postgresql-%Y-%m-%d.log
+        log_min_duration_statement: 1000
+        log_checkpoints: "on"
+        log_connections: "on"
+        log_disconnections: "on"
+        log_lock_waits: "on"
+        log_temp_files: 0
+        checkpoint_completion_target: 0.9
+        wal_buffers: 16MB
+ 
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+ 
+  users:
+    postgres:
+      password: postgres_strong_password_here
+      options:
+        - superuser
+    replicator:
+      password: replicator_strong_password_here
+      options:
+        - replication
+    aciertech_app:
+      password: app_strong_password_here
+      options:
+        - createdb
+ 
+  pg_hba:
+    - host replication replicator 192.168.1.0/24 md5
+    - host all all 192.168.1.0/24 md5
+    - host all all 127.0.0.1/32 md5
+    - local all all trust
+ 
+# ---------------------------------------------------------------------------
+# Configuration PostgreSQL locale (ce nœud uniquement)
+# ---------------------------------------------------------------------------
+postgresql:
+  listen: 0.0.0.0:5432
+  connect_address: 192.168.1.13:5432
+  data_dir: /var/lib/postgresql/16/main
+  bin_dir: /usr/lib/postgresql/16/bin
+  pgpass: /tmp/.pgpass_patroni
+ 
+  authentication:
+    replication:
+      username: replicator
+      password: replicator_strong_password_here
+    superuser:
+      username: postgres
+      password: postgres_strong_password_here
+    rewind:
+      username: postgres
+      password: postgres_strong_password_here
+ 
+  recovery_conf:
+    recovery_target_timeline: latest
+ 
+  callbacks:
+    on_start: /opt/aciertech/scripts/patroni_on_start.sh
+    on_stop: /opt/aciertech/scripts/patroni_on_stop.sh
+    on_role_change: /opt/aciertech/scripts/patroni_on_role_change.sh
+ 
+# ---------------------------------------------------------------------------
+# Tags du nœud
+# pg-node-3 est le réplica asynchrone dédié aux lectures (dashboard, IA)
+# Il ne doit pas devenir synchronous standby pour ne pas pénaliser les écritures
+# ---------------------------------------------------------------------------
+tags:
+  nofailover: false
+  noloadbalance: false   # HAProxy peut y envoyer des lectures (port 5001)
+  clonefrom: false
+  nosync: true           # Ne pas inclure dans synchronous_standby_names automatique
+ 
+# =============================================================================
+# NOTE OPÉRATIONNELLE — pg-node-3 absorbe le trafic de lecture (analytics,
+# dashboards Grafana, export IA). Son lag est tolérable pour ces workloads.
+# Surveiller : SELECT NOW() - pg_last_xact_replay_timestamp() AS lag;
+# =============================================================================
+ 

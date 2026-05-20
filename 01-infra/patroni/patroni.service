@@ -1,0 +1,97 @@
+# =============================================================================
+# AcierTech Industries — Unit systemd Patroni
+# Fichier : /etc/systemd/system/patroni.service
+# INF1620 — Cluster PostgreSQL 16 Haute Disponibilité
+#
+# INSTALLATION :
+#   sudo cp patroni.service /etc/systemd/system/patroni.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable patroni
+#   sudo systemctl start patroni
+#
+# SURVEILLANCE :
+#   sudo systemctl status patroni
+#   sudo journalctl -u patroni -f
+# =============================================================================
+
+[Unit]
+Description=Patroni — Orchestrateur HA PostgreSQL (AcierTech)
+Documentation=https://patroni.readthedocs.io/en/latest/
+# Patroni doit démarrer après le réseau et etcd (si etcd est local)
+After=network-online.target
+Wants=network-online.target
+# Si etcd tourne en Docker sur la même machine, ajouter :
+# After=docker.service
+# Requires=docker.service
+
+[Service]
+Type=simple
+User=postgres
+Group=postgres
+
+# ---------------------------------------------------------------------------
+# Commande de démarrage
+# Le fichier de config est spécifique à chaque nœud — adapter le nom du fichier
+# Utiliser une variable d'environnement ou un lien symbolique en production :
+#   /etc/patroni/patroni.yml → patroni-node1.yml
+# ---------------------------------------------------------------------------
+ExecStart=/usr/local/bin/patroni /etc/patroni/patroni.yml
+ExecReload=/bin/kill -HUP $MAINPID
+
+# ---------------------------------------------------------------------------
+# Comportement en cas d'échec
+# ---------------------------------------------------------------------------
+# Redémarrage automatique sauf arrêt explicite (systemctl stop)
+Restart=on-failure
+RestartSec=10s
+
+# Délai maximal accordé au démarrage avant timeout
+TimeoutStartSec=60s
+# Délai accordé à Patroni pour un arrêt propre (arrêt PostgreSQL inclus)
+TimeoutStopSec=120s
+
+# ---------------------------------------------------------------------------
+# Environnement & ulimits
+# ---------------------------------------------------------------------------
+# Variables d'environnement pour patronictl et pgbackrest
+Environment=PATRONI_HOME=/etc/patroni
+Environment=PGDATA=/var/lib/postgresql/16/main
+Environment=PATH=/usr/lib/postgresql/16/bin:/usr/local/bin:/usr/bin:/bin
+
+# Limite du nombre de fichiers ouverts (PostgreSQL ouvre beaucoup de FD)
+LimitNOFILE=65536
+LimitNPROC=65536
+
+# ---------------------------------------------------------------------------
+# Logging vers journald
+# ---------------------------------------------------------------------------
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=patroni
+
+# ---------------------------------------------------------------------------
+# Sécurité (optionnel, renforcement en production)
+# ---------------------------------------------------------------------------
+# Empêche Patroni d'écrire en dehors de ses répertoires légitimes
+# ProtectSystem=strict
+# ReadWritePaths=/var/lib/postgresql /var/log/postgresql /tmp /run/postgresql
+
+[Install]
+WantedBy=multi-user.target
+
+# =============================================================================
+# COMMANDES UTILES POST-DÉMARRAGE :
+#
+#  # Vérifier l'état du cluster sur ce nœud
+#  patronictl -c /etc/patroni/patroni.yml list
+#
+#  # Déclencher un switchover manuel vers pg-node-2
+#  patronictl -c /etc/patroni/patroni.yml switchover \
+#    --master pg-node-1 --candidate pg-node-2 --force
+#
+#  # Redémarrer PostgreSQL via Patroni (pas directement !)
+#  patronictl -c /etc/patroni/patroni.yml restart aciertech-cluster pg-node-1
+#
+#  # Afficher la configuration DCS actuelle
+#  patronictl -c /etc/patroni/patroni.yml show-config
+# =============================================================================

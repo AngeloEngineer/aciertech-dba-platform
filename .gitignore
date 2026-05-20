@@ -1,0 +1,23 @@
+# Secrets
+.env
+*.pgpass
+userlist.txt
+*_password*
+
+# Logs
+*.log
+/var/log/
+
+# Backups (trop lourds)
+/backup/
+*.backup
+*.tar.gz
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
