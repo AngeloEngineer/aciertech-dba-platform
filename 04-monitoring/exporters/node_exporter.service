@@ -1,0 +1,112 @@
+# =============================================================================
+# SYSTEMD UNIT — node_exporter
+# Fichier : 04-monitoring/exporters/node_exporter.service
+# Déployer : /etc/systemd/system/node_exporter.service
+# Sur chaque nœud : pg-node-1, pg-node-2, pg-node-3, monitoring-server
+#
+# Activation :
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now node_exporter
+#
+# Vérification :
+#   sudo systemctl status node_exporter
+#   curl -s http://localhost:9100/metrics | grep node_filesystem
+#
+# IMPORTANT — Textfile collector :
+#   Le répertoire /var/lib/node_exporter/textfile_collector/ est lu à chaque scrape.
+#   Les scripts 03-backup/scripts/verify_backup.sh et test_restore.sh y écrivent
+#   pgbackrest.prom (fallback si PUSHGATEWAY indisponible).
+#   Créer le répertoire et ajuster les permissions :
+#     sudo mkdir -p /var/lib/node_exporter/textfile_collector
+#     sudo chown postgres:postgres /var/lib/node_exporter/textfile_collector
+#     sudo chmod 755 /var/lib/node_exporter/textfile_collector
+# =============================================================================
+
+[Unit]
+Description=Prometheus Node Exporter — AcierTech INF1620
+Documentation=https://github.com/prometheus/node_exporter
+After=network.target
+
+[Service]
+# ── Utilisateur dédié (créer si inexistant) ───────────────────────────────────
+# sudo useradd --system --no-create-home --shell /usr/sbin/nologin node_exporter
+User=node_exporter
+Group=node_exporter
+
+# ── Type et redémarrage ───────────────────────────────────────────────────────
+Type=simple
+Restart=always
+RestartSec=5s
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+# ── Commande de démarrage ─────────────────────────────────────────────────────
+ExecStart=/usr/local/bin/node_exporter \
+  --web.listen-address=":9100" \
+  --web.telemetry-path="/metrics" \
+  \
+  --collector.textfile.directory="/var/lib/node_exporter/textfile_collector" \
+  \
+  --collector.filesystem.mount-points-exclude="^/(dev|proc|sys|run|snap)($|/)" \
+  --collector.filesystem.fs-types-exclude="^(tmpfs|devtmpfs|devfs|iso9660|overlay|aufs|squashfs)$" \
+  \
+  --collector.diskstats.device-exclude="^(ram|loop|fd|(h|s|v|xv)d[a-z]|nvme\\d+n\\d+p)\\d+$" \
+  \
+  --collector.netdev.device-exclude="^(lo|docker|veth|br-|virbr)" \
+  \
+  --collector.cpu \
+  --collector.meminfo \
+  --collector.loadavg \
+  --collector.netstat \
+  --collector.diskstats \
+  --collector.filesystem \
+  --collector.vmstat \
+  --collector.time \
+  --collector.uname \
+  --collector.systemd \
+  --collector.processes \
+  \
+  --no-collector.wifi \
+  --no-collector.arp \
+  --no-collector.bcache \
+  --no-collector.ipvs \
+  \
+  --log.level="warn" \
+  --log.format="logfmt"
+
+# ── Collecteurs spécifiques AcierTech ─────────────────────────────────────────
+# --collector.textfile.directory : lit pgbackrest.prom (métriques aciertech_backup_*)
+#   écrit par verify_backup.sh et test_restore.sh quand Pushgateway indisponible
+#
+# --collector.systemd : expose l'état des services systemd
+#   → permet d'alerter si postgres_exporter, patroni, pgbouncer s'arrêtent
+#   Nécessite de lancer node_exporter avec accès au bus D-Bus :
+#     sudo systemctl edit node_exporter --force
+#     [Service]
+#     SupplementaryGroups=systemd-journal
+
+# ── Sécurité ──────────────────────────────────────────────────────────────────
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+# Accès en lecture au textfile collector (écrit par l'user postgres via scripts backup)
+ReadOnlyPaths=/var/lib/node_exporter/textfile_collector
+# Accès en lecture à /proc, /sys (collecteurs OS)
+ReadOnlyPaths=/proc
+ReadOnlyPaths=/sys
+
+# ── Limites ressources ────────────────────────────────────────────────────────
+# node_exporter est très léger (<50Mo RAM typiquement)
+LimitNOFILE=8192
+MemoryMax=128M
+CPUQuota=10%
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=node_exporter
+
+[Install]
+WantedBy=multi-user.target

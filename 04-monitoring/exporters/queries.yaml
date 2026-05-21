@@ -1,0 +1,441 @@
+# =============================================================================
+# POSTGRES EXPORTER — Requêtes custom
+# Fichier : 04-monitoring/exporters/queries.yaml
+# Déployer : /etc/postgres_exporter/queries.yaml
+#
+# Ce fichier expose via Prometheus les métriques issues des vues et tables
+# créées dans 02-sql/. Chaque requête est exécutée par postgres_exporter
+# lors de chaque scrape (toutes les 15s selon prometheus.yml).
+#
+# Rôle : aciertech_ro — a accès à :
+#   - iot_clean.*           (GRANT SELECT — V007)
+#   - dba_schema.v_*        (vues créées dans 02-sql/views/)
+#   - dba_schema.backup_history, data_quality_snapshots, sensor_registry
+#   - pg_monitor             (GRANT TO aciertech_ro — pour pg_stat_replication)
+#
+# CONTRAINTE : pool_mode=transaction → connexion directe socket Unix (pas pgBouncer)
+#   Pas d'advisory locks, pas de SET LOCAL, pas de tables temp persistantes.
+#   Toutes les requêtes ci-dessous sont stateless et courtes.
+#
+# COMPATIBILITÉ : PostgreSQL 16 (champs leader_pid, query_id dans pg_stat_activity)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1. RÉPLICATION — v_replication_status
+#    Sources les métriques référencées dans postgresql_alerts.yml et cluster-ha.json
+#    Enrichit pg_stat_replication + pg_stat_wal (PG16)
+# -----------------------------------------------------------------------------
+aciertech_replication:
+  query: |
+    SELECT
+      application_name                          AS standby_name,
+      CASE state
+        WHEN 'streaming' THEN 1
+        ELSE 0
+      END                                       AS is_streaming,
+      CASE
+        WHEN lag_seconds IS NULL THEN -1
+        ELSE EXTRACT(EPOCH FROM lag_seconds)
+      END                                       AS lag_seconds,
+      COALESCE(lag_bytes, 0)                    AS lag_bytes,
+      CASE lag_level
+        WHEN 'OK'       THEN 0
+        WHEN 'WARNING'  THEN 1
+        WHEN 'CRITICAL' THEN 2
+        ELSE -1
+      END                                       AS lag_level_code,
+      CASE replica_status
+        WHEN 'SYNC_STREAMING'  THEN 1
+        WHEN 'ASYNC_STREAMING' THEN 2
+        WHEN 'CATCHING_UP'     THEN 3
+        WHEN 'PAUSED'          THEN 4
+        ELSE 0
+      END                                       AS replica_status_code,
+      CASE WHEN replica_status = 'CATCHING_UP' THEN 1 ELSE 0 END AS catching_up
+    FROM dba_schema.v_replication_status
+  metrics:
+    - standby_name:
+        usage: LABEL
+        description: "Nom du standby (application_name)"
+    - is_streaming:
+        usage: GAUGE
+        description: "1 si en streaming, 0 sinon"
+    - lag_seconds:
+        usage: GAUGE
+        description: "Lag de réplication en secondes (-1 si NULL)"
+    - lag_bytes:
+        usage: GAUGE
+        description: "Lag de réplication en octets WAL"
+    - lag_level_code:
+        usage: GAUGE
+        description: "Niveau lag : 0=OK, 1=WARNING, 2=CRITICAL"
+    - replica_status_code:
+        usage: GAUGE
+        description: "Statut replica : 1=SYNC 2=ASYNC 3=CATCHING_UP 4=PAUSED 0=autre"
+    - catching_up:
+        usage: GAUGE
+        description: "1 si le standby est en mode CATCHING_UP"
+  master: true    # Exécuté uniquement sur le primaire (postgres_exporter détecte le rôle)
+  cache_seconds: 10
+
+# -----------------------------------------------------------------------------
+# 2. SESSIONS — v_session_activity
+#    Sources : alert_level, blocages, requêtes longues
+#    Compatible PG16 : leader_pid, query_id inclus dans la vue
+# -----------------------------------------------------------------------------
+aciertech_sessions:
+  query: |
+    SELECT
+      COUNT(*)                                                 AS total_sessions,
+      COUNT(*) FILTER (WHERE state = 'active')                AS active_count,
+      COUNT(*) FILTER (WHERE state = 'idle')                  AS idle_count,
+      COUNT(*) FILTER (WHERE state = 'idle in transaction')   AS idle_in_transaction_count,
+      COUNT(*) FILTER (WHERE is_blocked)                      AS blocked_count,
+      COALESCE(MAX(EXTRACT(EPOCH FROM query_duration))
+        FILTER (WHERE state = 'active'), 0)                   AS long_query_seconds_max,
+      COUNT(*) FILTER (WHERE alert_level = 'CRITICAL')        AS critical_alert_count,
+      COUNT(*) FILTER (WHERE alert_level = 'WARNING')         AS warning_alert_count
+    FROM dba_schema.v_session_activity
+  metrics:
+    - total_sessions:
+        usage: GAUGE
+        description: "Nombre total de sessions backend (client uniquement)"
+    - active_count:
+        usage: GAUGE
+        description: "Sessions en état 'active' (requête en cours)"
+    - idle_count:
+        usage: GAUGE
+        description: "Sessions idle (connectées sans requête)"
+    - idle_in_transaction_count:
+        usage: GAUGE
+        description: "Sessions idle in transaction (transaction ouverte sans activité)"
+    - blocked_count:
+        usage: GAUGE
+        description: "Sessions bloquées en attente d'un lock"
+    - long_query_seconds_max:
+        usage: GAUGE
+        description: "Durée maximale d'une requête active en secondes"
+    - critical_alert_count:
+        usage: GAUGE
+        description: "Sessions au niveau CRITICAL (> 30s ou bloquées > 5min)"
+    - warning_alert_count:
+        usage: GAUGE
+        description: "Sessions au niveau WARNING (> 5s ou bloquées)"
+  master: false   # Exécuté sur tous les nœuds (primaire + standbys)
+  cache_seconds: 10
+
+# -----------------------------------------------------------------------------
+# 3. QUALITÉ DE DONNÉES — v_data_quality_dashboard
+#    Fenêtre 1h glissante par sensor_type
+#    Sources les alertes data_quality_alerts.yml et le dashboard data-quality.json
+# -----------------------------------------------------------------------------
+aciertech_data_quality:
+  query: |
+    SELECT
+      sensor_type,
+      quality_level,
+      COALESCE(total_readings, 0)      AS total_readings_1h,
+      COALESCE(valid_count, 0)         AS valid_count_1h,
+      COALESCE(quarantined_count, 0)   AS quarantined_count_1h,
+      COALESCE(error_count, 0)         AS error_count_1h,
+      COALESCE(valid_rate_pct, 0)      AS valid_rate_pct,
+      COALESCE(avg_quality_score, 0)   AS avg_quality_score,
+      COALESCE(sensors_active, 0)      AS sensors_active,
+      COALESCE(sensors_silent, 0)      AS sensors_silent,
+      CASE quality_level
+        WHEN 'EXCELLENT' THEN 4
+        WHEN 'GOOD'      THEN 3
+        WHEN 'DEGRADED'  THEN 2
+        WHEN 'CRITICAL'  THEN 1
+        WHEN 'NO_DATA'   THEN 0
+        ELSE -1
+      END                              AS quality_level_code
+    FROM dba_schema.v_data_quality_dashboard
+  metrics:
+    - sensor_type:
+        usage: LABEL
+        description: "Type de capteur (temperature, pression, vibration, courant, debit, vitesse, epaisseur)"
+    - quality_level:
+        usage: LABEL
+        description: "Niveau qualité textuel (EXCELLENT/GOOD/DEGRADED/CRITICAL/NO_DATA)"
+    - total_readings_1h:
+        usage: GAUGE
+        description: "Total lectures iot_raw sur 1h glissante"
+    - valid_count_1h:
+        usage: GAUGE
+        description: "Lectures valides (score >= 70) sur 1h"
+    - quarantined_count_1h:
+        usage: GAUGE
+        description: "Lectures envoyées en quarantaine sur 1h"
+    - error_count_1h:
+        usage: GAUGE
+        description: "Erreurs d'ingestion (iot_raw.ingestion_errors) sur 1h"
+    - valid_rate_pct:
+        usage: GAUGE
+        description: "Taux de validation en % (0-100)"
+    - avg_quality_score:
+        usage: GAUGE
+        description: "Score qualité moyen (fn_compute_quality_score) sur 1h"
+    - sensors_active:
+        usage: GAUGE
+        description: "Nombre de capteurs ayant émis sur la fenêtre 1h"
+    - sensors_silent:
+        usage: GAUGE
+        description: "Nombre de capteurs is_active=TRUE sans émission sur 1h"
+    - quality_level_code:
+        usage: GAUGE
+        description: "Code numérique niveau qualité : 4=EXCELLENT 3=GOOD 2=DEGRADED 1=CRITICAL 0=NO_DATA"
+  master: false
+  cache_seconds: 25   # Légèrement < intervalle pg_cron quality_snapshot (5min)
+
+# -----------------------------------------------------------------------------
+# 4. CAPTEURS SILENCIEUX — v_silent_sensors
+#    Sources les alertes SensorSilence* et le tableau de bord data-quality.json
+# -----------------------------------------------------------------------------
+aciertech_silent_sensors_summary:
+  query: |
+    SELECT
+      COUNT(*) FILTER (WHERE silence_level = 'CRITICAL')   AS critical_silent_sensors_count,
+      COUNT(*) FILTER (WHERE silence_level = 'WARNING')    AS warning_silent_sensors_count,
+      COUNT(*) FILTER (WHERE silence_level = 'NEVER_SEEN') AS never_seen_sensors_count,
+      COUNT(*)                                              AS total_silent_sensors_count
+    FROM dba_schema.v_silent_sensors
+  metrics:
+    - critical_silent_sensors_count:
+        usage: GAUGE
+        description: "Capteurs silencieux niveau CRITICAL (> 6×expected_interval_s)"
+    - warning_silent_sensors_count:
+        usage: GAUGE
+        description: "Capteurs silencieux niveau WARNING (> 3×expected_interval_s)"
+    - never_seen_sensors_count:
+        usage: GAUGE
+        description: "Capteurs actifs n'ayant jamais émis de donnée"
+    - total_silent_sensors_count:
+        usage: GAUGE
+        description: "Total capteurs silencieux toutes sévérités confondues"
+  master: false
+  cache_seconds: 25
+
+# -----------------------------------------------------------------------------
+# 4b. CAPTEURS SILENCIEUX — détail par capteur (pour tableau Grafana)
+#     Expose la durée de silence individuelle avec labels sensor_name / type / level
+# -----------------------------------------------------------------------------
+aciertech_silent_sensor_detail:
+  query: |
+    SELECT
+      sensor_name,
+      sensor_type,
+      silence_level,
+      location,
+      EXTRACT(EPOCH FROM silence_duration)   AS silence_duration_seconds
+    FROM dba_schema.v_silent_sensors
+    WHERE silence_level IN ('CRITICAL', 'WARNING', 'NEVER_SEEN')
+    LIMIT 50   -- Protection contre une explosion du nombre de séries Prometheus
+  metrics:
+    - sensor_name:
+        usage: LABEL
+        description: "Nom du capteur (sensor_registry.sensor_name)"
+    - sensor_type:
+        usage: LABEL
+        description: "Type de capteur"
+    - silence_level:
+        usage: LABEL
+        description: "Niveau de silence"
+    - location:
+        usage: LABEL
+        description: "Localisation physique du capteur"
+    - silence_duration_seconds:
+        usage: GAUGE
+        description: "Durée de silence en secondes"
+  master: false
+  cache_seconds: 25
+
+# -----------------------------------------------------------------------------
+# 5. BACKUP HISTORY — dba_schema.backup_history
+#    Expose les derniers backups pour le dashboard pra-backups.json
+#    Colonnes ajoutées : size_bytes, pitr_target, repo_path, error_detail
+# -----------------------------------------------------------------------------
+aciertech_backup_history_recent:
+  query: |
+    SELECT
+      backup_type,
+      backup_tool,
+      stanza,
+      status,
+      EXTRACT(EPOCH FROM started_at)                       AS started_at_epoch,
+      EXTRACT(EPOCH FROM completed_at)                     AS completed_at_epoch,
+      COALESCE(size_bytes, 0)                              AS size_bytes,
+      COALESCE(EXTRACT(EPOCH FROM (completed_at - started_at)), 0) AS duration_seconds,
+      CASE status
+        WHEN 'success' THEN 1
+        WHEN 'running' THEN 2
+        ELSE 0
+      END                                                  AS status_code,
+      CASE backup_type
+        WHEN 'full'         THEN 1
+        WHEN 'diff'         THEN 2
+        WHEN 'incr'         THEN 3
+        WHEN 'pitr'         THEN 4
+        WHEN 'test_restore' THEN 5
+        ELSE 0
+      END                                                  AS backup_type_code
+    FROM dba_schema.backup_history
+    WHERE started_at >= NOW() - INTERVAL '8 days'
+    ORDER BY started_at DESC
+    LIMIT 20
+  metrics:
+    - backup_type:
+        usage: LABEL
+        description: "Type de backup (full/diff/incr/pitr/test_restore)"
+    - backup_tool:
+        usage: LABEL
+        description: "Outil de backup (pgbackrest)"
+    - stanza:
+        usage: LABEL
+        description: "Stanza pgbackrest"
+    - status:
+        usage: LABEL
+        description: "Statut du backup (success/failed/running)"
+    - started_at_epoch:
+        usage: GAUGE
+        description: "Timestamp de démarrage (epoch Unix)"
+    - completed_at_epoch:
+        usage: GAUGE
+        description: "Timestamp de fin (epoch Unix)"
+    - size_bytes:
+        usage: GAUGE
+        description: "Taille du backup en octets"
+    - duration_seconds:
+        usage: GAUGE
+        description: "Durée du backup en secondes"
+    - status_code:
+        usage: GAUGE
+        description: "Code statut : 1=success 2=running 0=failed"
+    - backup_type_code:
+        usage: GAUGE
+        description: "Code type : 1=full 2=diff 3=incr 4=pitr 5=test_restore"
+  master: true
+  cache_seconds: 60   # Le backup_history est peu volatile entre les scrapes
+
+# -----------------------------------------------------------------------------
+# 6. VUE MATÉRIALISÉE IA — Suivi refresh v_ai_feature_set
+#    fn_refresh_ai_view enregistre la durée dans une table de métriques dédiée
+#    Requiert une table de tracking : dba_schema.ai_view_refresh_log
+#    (à créer ou à lire depuis cron.job_run_details si pg_cron est disponible)
+# -----------------------------------------------------------------------------
+aciertech_ai_view_refresh:
+  query: |
+    SELECT
+      COALESCE(
+        EXTRACT(EPOCH FROM (MAX(end_time) - MAX(start_time))),
+        0
+      )                                              AS refresh_duration_seconds,
+      COALESCE(
+        EXTRACT(EPOCH FROM MAX(end_time)),
+        0
+      )                                              AS last_refresh_timestamp,
+      COUNT(*) FILTER (WHERE status = 'failed')      AS refresh_failed_count_24h
+    FROM cron.job_run_details
+    WHERE jobname = 'aciertech_refresh_ai_view'
+      AND start_time >= NOW() - INTERVAL '24 hours'
+  metrics:
+    - refresh_duration_seconds:
+        usage: GAUGE
+        description: "Durée dernière exécution REFRESH CONCURRENTLY v_ai_feature_set (secondes)"
+    - last_refresh_timestamp:
+        usage: GAUGE
+        description: "Timestamp dernière refresh réussie (epoch Unix)"
+    - refresh_failed_count_24h:
+        usage: GAUGE
+        description: "Nombre d'échecs du job aciertech_refresh_ai_view sur 24h"
+  master: true
+  cache_seconds: 55   # < pg_cron interval de 5min (300s)
+
+# -----------------------------------------------------------------------------
+# 7. PG_CRON — Santé des jobs pg_cron aciertech_*
+#    Vérifie que les 8 jobs pg_cron tournent correctement
+# -----------------------------------------------------------------------------
+aciertech_pgcron_jobs:
+  query: |
+    SELECT
+      jobname,
+      COUNT(*) FILTER (WHERE status = 'succeeded'
+        AND start_time >= NOW() - INTERVAL '24 hours') AS success_24h,
+      COUNT(*) FILTER (WHERE status = 'failed'
+        AND start_time >= NOW() - INTERVAL '24 hours') AS failed_24h,
+      COALESCE(EXTRACT(EPOCH FROM MAX(start_time)
+        FILTER (WHERE status = 'succeeded')), 0)       AS last_success_epoch
+    FROM cron.job_run_details
+    WHERE jobname LIKE 'aciertech_%'
+      AND start_time >= NOW() - INTERVAL '24 hours'
+    GROUP BY jobname
+  metrics:
+    - jobname:
+        usage: LABEL
+        description: "Nom du job pg_cron (aciertech_quality_snapshot, aciertech_purge_*, etc.)"
+    - success_24h:
+        usage: GAUGE
+        description: "Nombre d'exécutions réussies sur 24h"
+    - failed_24h:
+        usage: GAUGE
+        description: "Nombre d'échecs sur 24h (0 = nominal)"
+    - last_success_epoch:
+        usage: GAUGE
+        description: "Timestamp dernière exécution réussie (epoch Unix)"
+  master: true
+  cache_seconds: 60
+
+# -----------------------------------------------------------------------------
+# 8. SENSOR REGISTRY — Cohérence globale (47 capteurs attendus)
+#    Vérification rapide que la base est saine
+# -----------------------------------------------------------------------------
+aciertech_sensor_registry:
+  query: |
+    SELECT
+      COUNT(*)                               AS total_sensors,
+      COUNT(*) FILTER (WHERE is_active)      AS active_sensors,
+      COUNT(*) FILTER (WHERE NOT is_active)  AS inactive_sensors,
+      COUNT(DISTINCT sensor_type)            AS distinct_sensor_types
+    FROM dba_schema.sensor_registry
+  metrics:
+    - total_sensors:
+        usage: GAUGE
+        description: "Nombre total de capteurs dans sensor_registry (attendu : 47)"
+    - active_sensors:
+        usage: GAUGE
+        description: "Capteurs actifs (is_active=TRUE)"
+    - inactive_sensors:
+        usage: GAUGE
+        description: "Capteurs inactifs (is_active=FALSE)"
+    - distinct_sensor_types:
+        usage: GAUGE
+        description: "Nombre de types distincts (attendu : 7 : temp/pression/vibration/courant/debit/vitesse/epaisseur)"
+  master: false
+  cache_seconds: 300   # Rarement modifié — rafraîchissement toutes les 5min suffit
+
+# -----------------------------------------------------------------------------
+# 9. ANOMALY LOG — Volume d'anomalies récentes par type
+#    Correspond aux codes générés par fn_compute_quality_score via trg_validate_sensor
+#    (FOREACH sur string_to_array(reason, '|') → 1 ligne par code d'anomalie)
+# -----------------------------------------------------------------------------
+aciertech_anomaly_log_by_type:
+  query: |
+    SELECT
+      anomaly_type,
+      COUNT(*)                                          AS anomaly_count_1h,
+      COUNT(DISTINCT sensor_id)                         AS distinct_sensors_1h
+    FROM iot_quarantine.anomaly_log
+    WHERE detected_at >= NOW() - INTERVAL '1 hour'
+    GROUP BY anomaly_type
+  metrics:
+    - anomaly_type:
+        usage: LABEL
+        description: "Code anomalie (OUT_OF_RANGE, WARNING_LOW, WARNING_HIGH, ZSCORE_ANOMALY, NO_THRESHOLD)"
+    - anomaly_count_1h:
+        usage: GAUGE
+        description: "Nombre d'anomalies de ce type sur 1h"
+    - distinct_sensors_1h:
+        usage: GAUGE
+        description: "Nombre de capteurs distincts ayant généré ce type d'anomalie sur 1h"
+  master: false
+  cache_seconds: 25

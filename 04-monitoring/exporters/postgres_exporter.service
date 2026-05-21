@@ -1,0 +1,74 @@
+# =============================================================================
+# SYSTEMD UNIT — postgres_exporter
+# Fichier : 04-monitoring/exporters/postgres_exporter.service
+# Déployer : /etc/systemd/system/postgres_exporter.service
+# Sur chaque nœud : pg-node-1, pg-node-2, pg-node-3
+#
+# Activation :
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now postgres_exporter
+#
+# Vérification :
+#   sudo systemctl status postgres_exporter
+#   curl -s http://localhost:9187/metrics | grep aciertech_
+# =============================================================================
+
+[Unit]
+Description=Prometheus PostgreSQL Exporter — AcierTech INF1620
+Documentation=https://github.com/prometheus-community/postgres_exporter
+After=network.target postgresql.service
+
+# Dépendance souple : si PostgreSQL n'est pas encore prêt, l'exporter réessaie
+# (auto-reconnect natif de postgres_exporter)
+Wants=postgresql.service
+
+[Service]
+# ── Utilisateur ───────────────────────────────────────────────────────────────
+# Utiliser l'utilisateur postgres pour accéder au socket Unix local sans mot de passe
+# OU créer un utilisateur système dédié postgres_exporter
+# Si DATA_SOURCE_NAME dans .env utilise un mot de passe → utiliser un user dédié
+User=postgres
+Group=postgres
+
+# ── Type et redémarrage ───────────────────────────────────────────────────────
+Type=simple
+Restart=always
+RestartSec=10s
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+# ── Variables d'environnement ─────────────────────────────────────────────────
+# Charge le DSN (aciertech_ro), le port (9187) et le chemin queries.yaml
+EnvironmentFile=/etc/postgres_exporter/postgres_exporter.env
+
+# ── Commande de démarrage ─────────────────────────────────────────────────────
+# Binaire installé via : go install github.com/prometheus-community/postgres_exporter@latest
+# Ou package système : apt install prometheus-postgres-exporter
+ExecStart=/usr/local/bin/postgres_exporter \
+  --web.listen-address=${PG_EXPORTER_WEB_LISTEN_ADDRESS} \
+  --web.telemetry-path=${PG_EXPORTER_WEB_TELEMETRY_PATH} \
+  --extend.query-path=${PG_EXPORTER_EXTEND_QUERY_PATH} \
+  --include-databases=${PG_EXPORTER_INCLUDE_DATABASES} \
+  --log.level=${PG_EXPORTER_LOG_LEVEL} \
+  --log.format=${PG_EXPORTER_LOG_FORMAT}
+
+# ── Sécurité ──────────────────────────────────────────────────────────────────
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/tmp
+
+# ── Limites ressources ────────────────────────────────────────────────────────
+# L'exporter est léger : limiter pour ne pas concurrencer PostgreSQL
+LimitNOFILE=1024
+MemoryMax=256M
+CPUQuota=20%
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=postgres_exporter
+
+[Install]
+WantedBy=multi-user.target
