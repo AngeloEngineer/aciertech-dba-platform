@@ -1,0 +1,97 @@
+# ==============================================================================
+# PROJET    : AcierTech Industries S.A. — INF1620 Formation DBA PostgreSQL 16 HA
+# FICHIER   : 03-backup/cron/crontab.aciertech
+# OBJET     : Crontab de l'utilisateur postgres — tâches backup pgBackRest
+# DÉPLOYER  : Via crontab_install.sh (sudo -u postgres crontab crontab.aciertech)
+# AUTEUR    : DBA AcierTech / INF1620
+# VERSION   : 1.0
+# ==============================================================================
+#
+# PLANNING HEBDOMADAIRE
+# ─────────────────────
+#   Dim 02h00   : Backup FULL     (backup_full.sh)
+#   Lun-Sam 02h : Backup DIFF     (backup_diff.sh)
+#   Tous 03h00  : Vérif intégrité (verify_backup.sh)
+#   Sam 04h00   : Test restore    (test_restore.sh) — sur restore-test-server
+#
+# LOCALISATION TEMPORELLE
+# ───────────────────────
+#   Lomé, Togo → UTC+0 (GMT) toute l'année (pas de DST)
+#   Les heures ci-dessous sont en UTC = heure locale de Lomé.
+#   02h00 = nuit profonde, usine en production réduite (pas d'arrêt complet
+#   mais activité IoT minimale → impact I/O backup acceptable).
+#
+# RÉPERTOIRES
+# ───────────
+#   Scripts : /opt/aciertech/03-backup/scripts/
+#   Logs    : /var/log/pgbackrest/ (rotation logrotate configurée séparément)
+# ==============================================================================
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+PGUSER=postgres
+PGDATABASE=aciertech_db
+PG_CONNECT_HOST=localhost
+PG_CONNECT_PORT=5432
+PATRONI_API_HOST=localhost
+PATRONI_API_PORT=8008
+# Pushgateway : décommenter et renseigner quand 04-monitoring/ est déployé
+# PUSHGATEWAY_URL=http://monitoring-server:9091
+
+# ==============================================================================
+# ARCHIVAGE WAL (géré par postgresql.conf / Patroni — pas de cron nécessaire)
+# archive_command = 'pgbackrest --stanza=aciertech archive-push %p'
+# → Déclenché automatiquement par PostgreSQL à chaque segment WAL complété
+# ==============================================================================
+
+# ==============================================================================
+# BACKUP FULL — Dimanche 02h00 UTC
+# Sur pg-node-1 (standby ou primary selon Patroni) — pgBackRest choisit le standby
+# ==============================================================================
+0 2 * * 0   /opt/aciertech/03-backup/scripts/backup_full.sh \
+              >> /var/log/pgbackrest/cron_full.log 2>&1
+
+# ==============================================================================
+# BACKUP DIFF — Lundi au Samedi 02h00 UTC
+# (Lun=1, Mar=2, Mer=3, Jeu=4, Ven=5, Sam=6)
+# ==============================================================================
+0 2 * * 1-6  /opt/aciertech/03-backup/scripts/backup_diff.sh \
+               >> /var/log/pgbackrest/cron_diff.log 2>&1
+
+# ==============================================================================
+# VÉRIFICATION INTÉGRITÉ — Tous les jours 03h00 UTC
+# Après le backup (full ou diff) de 02h00
+# ==============================================================================
+0 3 * * *    /opt/aciertech/03-backup/scripts/verify_backup.sh \
+               >> /var/log/pgbackrest/cron_verify.log 2>&1
+
+# ==============================================================================
+# TEST DE RESTAURATION AUTOMATISÉ — Samedi 04h00 UTC
+# S'exécute sur restore-test-server (ne pas activer sur les nœuds production)
+# Commenter cette ligne sur pg-node-{1,2,3} — décommenter sur restore-test-server
+# ==============================================================================
+# 0 4 * * 6    /opt/aciertech/03-backup/scripts/test_restore.sh \
+#               >> /var/log/pgbackrest/cron_test_restore.log 2>&1
+
+# ==============================================================================
+# LOGROTATE BACKUP LOGS — 1er du mois 01h00 UTC
+# Rotation des logs pgBackRest (complémentaire à /etc/logrotate.d/pgbackrest)
+# ==============================================================================
+0 1 1 * *    find /var/log/pgbackrest -name "*.log" -mtime +30 -delete \
+               >> /var/log/pgbackrest/cron_logclean.log 2>&1
+
+# ==============================================================================
+# VÉRIFICATION DE LA STANZA — Mercredi 01h00 UTC
+# Check léger : confirme que l'archivage WAL fonctionne et que la stanza est saine
+# (distinct de verify_backup.sh qui vérifie les checksums)
+# ==============================================================================
+0 1 * * 3    pgbackrest --config=/etc/pgbackrest/pgbackrest.conf \
+                          --stanza=aciertech \
+                          check \
+               >> /var/log/pgbackrest/cron_stanza_check.log 2>&1
+
+# ==============================================================================
+# FIN DU FICHIER
+# Pour afficher le planning actif : crontab -l
+# Pour éditer manuellement       : crontab -e
+# ==============================================================================

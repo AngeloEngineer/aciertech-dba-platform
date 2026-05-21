@@ -4,7 +4,7 @@
 -- OBJET     : Rafraîchissement de iot_clean.v_ai_feature_set (vue matérialisée)
 -- DÉPEND DE : V003 (v_ai_feature_set + UNIQUE index pour CONCURRENT), V005
 -- APPELÉ PAR: pg_cron toutes les 5 min (voir pg_cron_jobs.sql)
--- AUTEUR    : DBA AcierTech / INF1620
+-- AUTEUR    : BILAKE & KPELOU / INF1620
 -- VERSION   : 1.0 — PostgreSQL 16
 -- =============================================================================
 --
