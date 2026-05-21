@@ -1,0 +1,357 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS", "label": "Prometheus-AcierTech",
+      "type": "datasource", "pluginId": "prometheus"
+    }
+  ],
+  "__requires": [
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" },
+    { "type": "grafana",    "id": "grafana",    "name": "Grafana",    "version": "10.0.0" },
+    { "type": "panel",      "id": "stat",       "name": "Stat",       "version": "" },
+    { "type": "panel",      "id": "table",      "name": "Table",      "version": "" },
+    { "type": "panel",      "id": "timeseries", "name": "Time series","version": "" },
+    { "type": "panel",      "id": "gauge",      "name": "Gauge",      "version": "" },
+    { "type": "panel",      "id": "text",       "name": "Text",       "version": "" }
+  ],
+  "description": "PRA / Backups pgbackrest — Historique, état WAL, espace dépôt NFS, tests restauration — AcierTech INF1620",
+  "editable": false,
+  "panels": [
+    {
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100, "title": "État Global Backup (métriques produites par 03-backup/scripts/)", "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "options": { "0": { "color": "red",   "index": 0, "text": "KO — ÉCHEC" },
+                           "1": { "color": "green", "index": 1, "text": "OK — VÉRIFIÉ" } },
+              "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null }, { "color": "green", "value": 1 }
+          ]}
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 1 },
+      "id": 1,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center",
+                   "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto" },
+      "title": "Vérification backup (verify_backup.sh)",
+      "targets": [{
+        "expr": "aciertech_backup_verify_status",
+        "legendFormat": "{{ stanza }} @ {{ host }}", "refId": "A", "instant": true
+      }],
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "options": { "0": { "color": "red",   "index": 0, "text": "KO — ÉCHEC" },
+                           "1": { "color": "green", "index": 1, "text": "OK — 10/10 CHECKS" } },
+              "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null }, { "color": "green", "value": 1 }
+          ]}
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 1 },
+      "id": 2,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center",
+                   "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto" },
+      "title": "Test restauration (test_restore.sh)",
+      "targets": [{
+        "expr": "aciertech_backup_test_status",
+        "legendFormat": "{{ stanza }} @ {{ host }}", "refId": "A", "instant": true
+      }],
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "bytes",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 107374182400 },
+            { "color": "red",    "value": 214748364800 }
+          ]}
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 1 },
+      "id": 3,
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Taille dépôt NFS pgbackrest",
+      "description": "repo1-path=/var/lib/pgbackrest | retention-full=4",
+      "targets": [{
+        "expr": "aciertech_backup_repo_size_bytes",
+        "legendFormat": "{{ stanza }}", "refId": "A", "instant": true
+      }],
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red",    "value": null },
+            { "color": "yellow", "value": 1    },
+            { "color": "green",  "value": 2    }
+          ]}
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 1 },
+      "id": 4,
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Nombre de backups FULL disponibles",
+      "targets": [{
+        "expr": "aciertech_backup_full_count",
+        "legendFormat": "FULL count", "refId": "A", "instant": true
+      }],
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "h",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 170  },
+            { "color": "red",    "value": 192  }
+          ]}
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 1 },
+      "id": 5,
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Âge dernier FULL (heures)",
+      "description": "Planifié : dimanche 02h UTC | Seuil alerte : 192h (8j)",
+      "targets": [{
+        "expr": "aciertech_backup_oldest_full_age_hours",
+        "legendFormat": "Âge FULL (h)", "refId": "A", "instant": true
+      }],
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "dateTimeAsLocal",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }
+          ]}
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 1 },
+      "id": 6,
+      "options": { "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Dernier backup réussi (timestamp)",
+      "targets": [{
+        "expr": "aciertech_backup_last_success_timestamp",
+        "legendFormat": "Dernier succès", "refId": "A", "instant": true
+      }],
+      "type": "stat"
+    },
+    {
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
+      "id": 101, "title": "Planning Backups — Crontab AcierTech (UTC = heure Lomé)", "type": "row"
+    },
+    {
+      "content": "## Planning pgbackrest (crontab.aciertech — UTC+0, Lomé)\n\n| Tâche | Planification | Nœud | Script |\n|-------|--------------|------|--------|\n| **Backup FULL** | Dimanche 02:00 UTC | pg-node-1 | `backup_full.sh` |\n| **Backup DIFF** | Lun–Sam 02:00 UTC | pg-node-1 | `backup_diff.sh` |\n| **Vérification** | Quotidien 03:00 UTC | pg-node-1 | `verify_backup.sh` |\n| **Stanza check** | Mercredi 01:00 UTC | pg-node-1 | `pgbackrest check` |\n| **Test restauration** | *(activer sur restore-test-server)* | restore-test-server | `test_restore.sh` |\n| **Log cleanup** | 1er du mois 01:00 UTC | pg-node-1 | `logclean` |\n\n**Config :** backup-standby=y → backup depuis pg-node-2 / repo1=NFS /var/lib/pgbackrest / cipher=aes-256-cbc / retention-full=4",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 7 },
+      "id": 15,
+      "options": { "code": { "language": "plaintext" }, "mode": "markdown" },
+      "title": "Référence Planning (03-backup/cron/crontab.aciertech)",
+      "type": "text"
+    },
+    {
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
+      "id": 102, "title": "Évolution temporelle — Vérifications & Tests", "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2 },
+          "mappings": [
+            { "options": { "0": { "color": "red",   "text": "KO" },
+                           "1": { "color": "green", "text": "OK" } },
+              "type": "value" }
+          ]
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 16 },
+      "id": 20,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Historique vérifications backup (0=KO / 1=OK)",
+      "targets": [{
+        "expr": "aciertech_backup_verify_status",
+        "legendFormat": "Vérif {{ stanza }}", "refId": "A"
+      }],
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2 }
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 16 },
+      "id": 21,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Historique tests de restauration (0=KO / 1=OK)",
+      "description": "test_restore.sh : 10 checks (schémas, sensor_registry=47, sensor_thresholds=47, vue AI, fonctions DBA...)",
+      "targets": [{
+        "expr": "aciertech_backup_test_status",
+        "legendFormat": "Test restore {{ stanza }}", "refId": "A"
+      }],
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "id": 103, "title": "Espace Disque Nœuds PostgreSQL", "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 2 },
+          "unit": "percentunit",
+          "min": 0, "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 0.75 },
+            { "color": "red",    "value": 0.85 }
+          ]}
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "id": 30,
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Taux d'utilisation disque PGDATA (/var/lib/postgresql)",
+      "targets": [
+        {
+          "expr": "1 - node_filesystem_avail_bytes{mountpoint=\"/var/lib/postgresql\",job=~\"node_exporter_pg\"} / node_filesystem_size_bytes{mountpoint=\"/var/lib/postgresql\",job=~\"node_exporter_pg\"}",
+          "legendFormat": "{{ node }} PGDATA", "refId": "A"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 2 },
+          "unit": "percentunit",
+          "min": 0, "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 0.70 },
+            { "color": "red",    "value": 0.85 }
+          ]}
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "id": 31,
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Taux d'utilisation NFS Backup (/var/lib/pgbackrest)",
+      "targets": [
+        {
+          "expr": "1 - node_filesystem_avail_bytes{mountpoint=\"/var/lib/pgbackrest\"} / node_filesystem_size_bytes{mountpoint=\"/var/lib/pgbackrest\"}",
+          "legendFormat": "NFS Backup", "refId": "A"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 },
+      "id": 104, "title": "Historique Backups — dba_schema.backup_history (via queries.yaml)", "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "align": "auto", "displayMode": "auto", "filterable": true }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "status" },
+            "properties": [{
+              "id": "mappings",
+              "value": [
+                { "options": {
+                    "success": { "color": "green", "index": 0 },
+                    "failed":  { "color": "red",   "index": 1 },
+                    "running": { "color": "blue",  "index": 2 }
+                  }, "type": "value" }
+              ]
+            }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "size_bytes" },
+            "properties": [{ "id": "unit", "value": "bytes" }]
+          }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 33 },
+      "id": 40,
+      "options": {
+        "footer": { "show": false },
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "started_at" }]
+      },
+      "title": "Historique récent backups (dba_schema.backup_history — type: full/diff/pitr/test_restore)",
+      "description": "Colonnes ajoutées : size_bytes, pitr_target, repo_path, error_detail (ALTER TABLE appliqué avant premier backup)",
+      "targets": [{
+        "expr": "aciertech_backup_history_info{job=~\"postgres_exporter_node.*\"}",
+        "format": "table",
+        "legendFormat": "", "refId": "A", "instant": true
+      }],
+      "transformations": [
+        { "id": "organize", "options": {
+          "renameByName": {
+            "backup_type":  "Type",
+            "stanza":       "Stanza",
+            "started_at":   "Démarré à (UTC)",
+            "completed_at": "Terminé à (UTC)",
+            "status":       "Statut",
+            "size_bytes":   "Taille",
+            "backup_label": "Label"
+          },
+          "excludeByName": {
+            "Time": true, "__name__": true, "instance": true, "job": true
+          }
+        }}
+      ],
+      "type": "table"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 38,
+  "tags": ["aciertech", "backup", "pgbackrest", "pra", "pitr", "wal"],
+  "templating": { "list": [] },
+  "time": { "from": "now-24h", "to": "now" },
+  "timezone": "utc",
+  "title": "AcierTech — PRA & Backups pgbackrest",
+  "uid": "aciertech-pra-backups",
+  "version": 1
+}

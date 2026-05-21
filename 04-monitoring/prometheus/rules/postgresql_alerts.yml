@@ -1,0 +1,280 @@
+# =============================================================================
+# PROMETHEUS RULES — Alertes PostgreSQL / Patroni / HAProxy
+# Fichier : 04-monitoring/prometheus/rules/postgresql_alerts.yml
+# Sources : pg_stat_replication, pg_stat_activity, pg_locks,
+#           v_replication_status, v_session_activity (via queries.yaml)
+# =============================================================================
+
+groups:
+
+  # ---------------------------------------------------------------------------
+  # Groupe 1 : Cluster HA Patroni
+  # ---------------------------------------------------------------------------
+  - name: patroni_cluster
+    interval: 15s
+    rules:
+
+      # Nœud Patroni inaccessible (postgres_exporter ne répond plus)
+      - alert: PatroniNodeDown
+        expr: up{job=~"postgres_exporter_node.*"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team:     dba
+          site:     Lomé-AcierTech
+        annotations:
+          summary:     "Nœud Patroni inaccessible : {{ $labels.node }}"
+          description: >
+            Le postgres_exporter du nœud {{ $labels.node }} ne répond plus depuis
+            plus d'1 minute. Vérifier l'état PostgreSQL et Patroni sur ce nœud.
+            Cluster : {{ $labels.cluster }}.
+          runbook: "https://wiki.aciertech/runbooks/patroni-node-down"
+
+      # Perte du quorum etcd (moins de 2 membres UP)
+      - alert: EtcdQuorumLost
+        expr: count(up{job="etcd"} == 1) < 2
+        for: 30s
+        labels:
+          severity: critical
+          team:     dba
+        annotations:
+          summary:     "Quorum etcd perdu — cluster HA en danger"
+          description: >
+            Moins de 2 membres etcd sont actifs. Le cluster Patroni ne peut plus
+            effectuer d'élection. Action immédiate requise.
+
+      # Plus aucun primaire détecté via HAProxy port 5000
+      - alert: NoPrimaryDetected
+        expr: haproxy_backend_active_servers{proxy="postgresql-primary"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          team:     dba
+        annotations:
+          summary:     "Aucun serveur primaire actif dans HAProxy"
+          description: >
+            HAProxy ne voit aucun backend actif sur le pool primary (port 5000).
+            Failover Patroni en cours ou cluster dégradé.
+
+      # Moins de 2 standbys disponibles (résilience réduite)
+      - alert: StandbyCountLow
+        expr: haproxy_backend_active_servers{proxy="postgresql-replica"} < 1
+        for: 2m
+        labels:
+          severity: warning
+          team:     dba
+        annotations:
+          summary:     "Nombre de standbys insuffisant (< 1)"
+          description: >
+            Le pool replica (HAProxy port 5001) a moins de 1 backend actif.
+            La tolérance aux pannes est réduite.
+
+  # ---------------------------------------------------------------------------
+  # Groupe 2 : Réplication PostgreSQL
+  # ---------------------------------------------------------------------------
+  - name: replication_lag
+    interval: 15s
+    rules:
+
+      # Lag réplication > 30s (état CRITICAL selon v_replication_status)
+      - alert: ReplicationLagCritical
+        expr: >
+          aciertech_replication_lag_seconds{job=~"postgres_exporter_node.*"} > 30
+        for: 1m
+        labels:
+          severity: critical
+          team:     dba
+        annotations:
+          summary:     "Lag réplication CRITIQUE sur {{ $labels.node }} : {{ $value | humanizeDuration }}"
+          description: >
+            Le standby {{ $labels.standby_name }} sur {{ $labels.node }} accuse un lag
+            de {{ $value | humanizeDuration }} (seuil critique : 30s).
+            Risque de perte de données en cas de failover.
+          runbook: "https://wiki.aciertech/runbooks/replication-lag"
+
+      # Lag réplication > 5s (état WARNING)
+      - alert: ReplicationLagWarning
+        expr: >
+          aciertech_replication_lag_seconds{job=~"postgres_exporter_node.*"} > 5
+          and
+          aciertech_replication_lag_seconds{job=~"postgres_exporter_node.*"} <= 30
+        for: 3m
+        labels:
+          severity: warning
+          team:     dba
+        annotations:
+          summary:     "Lag réplication en avertissement sur {{ $labels.node }} : {{ $value | humanizeDuration }}"
+          description: >
+            Lag de {{ $value | humanizeDuration }} sur {{ $labels.standby_name }}.
+            Surveiller l'évolution. Seuil critique : 30s.
+
+      # Lag WAL en octets > 100 Mo
+      - alert: ReplicationBytelagHigh
+        expr: >
+          aciertech_replication_lag_bytes{job=~"postgres_exporter_node.*"} > 104857600
+        for: 2m
+        labels:
+          severity: warning
+          team:     dba
+        annotations:
+          summary:     "Retard WAL élevé sur {{ $labels.node }} : {{ $value | humanizeBytes }}"
+          description: >
+            Le standby {{ $labels.standby_name }} a {{ $value | humanizeBytes }} de WAL
+            en attente d'application. Risque d'accumulation.
+
+      # Standby en mode CATCHING_UP depuis trop longtemps
+      - alert: StandbyCatchingUpTooLong
+        expr: >
+          aciertech_replication_catching_up{job=~"postgres_exporter_node.*"} == 1
+        for: 10m
+        labels:
+          severity: warning
+          team:     dba
+        annotations:
+          summary:     "Standby {{ $labels.standby_name }} en CATCHING_UP depuis > 10min"
+          description: >
+            Le nœud {{ $labels.node }} est en mode CATCHING_UP depuis plus de 10 minutes.
+            Vérifier l'état du réseau et la charge du primaire.
+
+  # ---------------------------------------------------------------------------
+  # Groupe 3 : Connexions et sessions
+  # ---------------------------------------------------------------------------
+  - name: pg_connections
+    interval: 15s
+    rules:
+
+      # Taux d'utilisation des connexions > 85%
+      - alert: ConnectionsNearLimit
+        expr: >
+          pg_stat_database_numbackends{datname="aciertech_db"}
+          / pg_settings_max_connections
+          > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          team:     dba
+        annotations:
+          summary:     "Connexions PostgreSQL à {{ $value | humanizePercentage }} de la limite"
+          description: >
+            aciertech_db utilise {{ $value | humanizePercentage }} des {{ $labels.max_connections }}
+            connexions disponibles. pgBouncer devrait absorber les pics.
+            Vérifier les connexions idle bloquant des slots.
+
+      # Taux d'utilisation connexions > 95%
+      - alert: ConnectionsAtLimit
+        expr: >
+          pg_stat_database_numbackends{datname="aciertech_db"}
+          / pg_settings_max_connections
+          > 0.95
+        for: 2m
+        labels:
+          severity: critical
+          team:     dba
+        annotations:
+          summary:     "Connexions PostgreSQL SATURÉES sur {{ $labels.node }}"
+          description: >
+            Plus de 95% des {{ $labels.max_connections }} connexions sont utilisées.
+            Les nouvelles connexions seront refusées. Vérifier pgBouncer et les
+            connexions longues inactives.
+
+      # Sessions bloquées > 5 minutes (détectées via v_session_activity)
+      - alert: BlockedSessionsCritical
+        expr: aciertech_sessions_blocked_count{job=~"postgres_exporter_node.*"} > 0
+        for: 5m
+        labels:
+          severity: critical
+          team:     dba
+        annotations:
+          summary:     "{{ $value }} session(s) bloquée(s) depuis > 5min sur {{ $labels.node }}"
+          description: >
+            Des sessions sont bloquées en attente de lock depuis plus de 5 minutes.
+            Exécuter : SELECT * FROM dba_schema.v_session_activity WHERE alert_level='CRITICAL';
+            pour identifier la chaîne de blocage.
+          runbook: "https://wiki.aciertech/runbooks/blocked-sessions"
+
+      # Requête longue en cours > 2 minutes
+      - alert: LongRunningQuery
+        expr: aciertech_long_query_seconds_max{job=~"postgres_exporter_node.*"} > 120
+        for: 0m
+        labels:
+          severity: warning
+          team:     dba
+        annotations:
+          summary:     "Requête longue détectée sur {{ $labels.node }} : {{ $value | humanizeDuration }}"
+          description: >
+            Une requête tourne depuis {{ $value | humanizeDuration }} sur {{ $labels.node }}.
+            log_min_duration_statement=1000ms doit avoir loggué cette requête.
+            Vérifier pg_stat_activity et les logs PostgreSQL.
+
+  # ---------------------------------------------------------------------------
+  # Groupe 4 : Locks et deadlocks
+  # ---------------------------------------------------------------------------
+  - name: pg_locks
+    interval: 30s
+    rules:
+
+      # Verrous en attente > 10 simultanément
+      - alert: HighLockWaitCount
+        expr: >
+          pg_locks_count{job=~"postgres_exporter_node.*", mode="RowExclusiveLock", granted="false"}
+          > 10
+        for: 2m
+        labels:
+          severity: warning
+          team:     dba
+        annotations:
+          summary:     "{{ $value }} verrous en attente sur {{ $labels.node }}"
+          description: >
+            Plus de 10 requêtes attendent un verrou sur {{ $labels.node }}.
+            Risque de dégradation des ingestions IoT (trg_validate_sensor).
+
+      # Deadlocks détectés (pg_stat_database.deadlocks croissant)
+      - alert: DeadlocksDetected
+        expr: >
+          increase(pg_stat_database_deadlocks{datname="aciertech_db"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          team:     dba
+        annotations:
+          summary:     "Deadlock(s) détecté(s) sur aciertech_db — {{ $labels.node }}"
+          description: >
+            {{ $value }} deadlock(s) sur la fenêtre 5min. Vérifier les triggers
+            trg_validate_sensor et trg_audit_changes pour des accès concurrents.
+
+  # ---------------------------------------------------------------------------
+  # Groupe 5 : Performances générales
+  # ---------------------------------------------------------------------------
+  - name: pg_performance
+    interval: 30s
+    rules:
+
+      # Taux de cache hit < 95% (indicateur de pression mémoire)
+      - alert: CacheHitRateLow
+        expr: >
+          pg_stat_database_blks_hit{datname="aciertech_db"}
+          / (pg_stat_database_blks_hit{datname="aciertech_db"} + pg_stat_database_blks_read{datname="aciertech_db"} + 1)
+          < 0.95
+        for: 10m
+        labels:
+          severity: warning
+          team:     dba
+        annotations:
+          summary:     "Cache hit PostgreSQL faible : {{ $value | humanizePercentage }} sur {{ $labels.node }}"
+          description: >
+            Le taux de cache hit est de {{ $value | humanizePercentage }} (seuil : 95%).
+            Augmenter shared_buffers ou vérifier les full scans inattendus.
+
+      # pgBouncer — pool saturé (connexions en attente)
+      - alert: PgBouncerPoolWaiting
+        expr: pgbouncer_pools_cl_waiting{database="aciertech_db"} > 5
+        for: 2m
+        labels:
+          severity: warning
+          team:     dba
+        annotations:
+          summary:     "pgBouncer : {{ $value }} connexions en attente sur aciertech_db"
+          description: >
+            pgBouncer a {{ $value }} clients en attente d'un slot serveur.
+            pool_mode=transaction : vérifier que les transactions ne sont pas trop longues.
+            Nota : INTERDIT advisory locks, SET LOCAL, LISTEN/NOTIFY dans ce mode.

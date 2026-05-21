@@ -1,0 +1,29 @@
+# =============================================================================
+# GRAFANA PROVISIONING — Auto-chargement des dashboards
+# Fichier : 04-monitoring/grafana/provisioning/dashboards/dashboards.yml
+# =============================================================================
+
+apiVersion: 1
+
+providers:
+  - name:            AcierTech-Dashboards
+    orgId:           1
+    type:            file
+    disableDeletion: true          # Ne pas supprimer les dashboards provisionnés depuis l'UI
+    updateIntervalSeconds: 30      # Recheck du dossier toutes les 30s
+    allowUiUpdates:  false         # Les dashboards provisionnés ne sont pas éditables via l'UI
+    options:
+      path:          /etc/grafana/dashboards   # Chemin vers les .json (monter le dossier grafana/dashboards/)
+      foldersFromFilesStructure: false
+
+  # Dossier dédié AcierTech dans Grafana
+  - name:            AcierTech-Folder
+    orgId:           1
+    folder:          "AcierTech — Production"
+    folderUid:       aciertech-prod
+    type:            file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates:  false
+    options:
+      path:          /etc/grafana/dashboards

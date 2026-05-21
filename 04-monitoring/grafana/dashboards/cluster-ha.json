@@ -1,0 +1,397 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus-AcierTech",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" },
+    { "type": "grafana",    "id": "grafana",    "name": "Grafana",    "version": "10.0.0" },
+    { "type": "panel",      "id": "stat",       "name": "Stat",       "version": "" },
+    { "type": "panel",      "id": "table",      "name": "Table",      "version": "" },
+    { "type": "panel",      "id": "timeseries", "name": "Time series","version": "" },
+    { "type": "panel",      "id": "gauge",      "name": "Gauge",      "version": "" }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1, "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true, "hide": true, "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts", "type": "dashboard"
+      },
+      {
+        "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+        "enable": true, "expr": "changes(aciertech_backup_last_success_timestamp[1m]) > 0",
+        "hide": false, "iconColor": "#1F60C4", "name": "Backup exécuté",
+        "step": "60s", "titleFormat": "Backup", "type": "prometheus"
+      }
+    ]
+  },
+  "description": "État cluster HA Patroni 3 nœuds, réplication, HAProxy, etcd — AcierTech INF1620",
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100, "title": "État Cluster Patroni", "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "options": { "0": { "color": "red",   "index": 0, "text": "DOWN" },
+                           "1": { "color": "green", "index": 1, "text": "UP"   } },
+              "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null }, { "color": "green", "value": 1 }
+          ]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "id": 1,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center",
+                   "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"] },
+                   "textMode": "auto" },
+      "title": "pg-node-1 (Primaire)",
+      "targets": [{
+        "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+        "expr": "up{job=\"postgres_exporter_node1\"}",
+        "legendFormat": "pg-node-1", "refId": "A"
+      }],
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "options": { "0": { "color": "red",   "index": 0, "text": "DOWN" },
+                           "1": { "color": "green", "index": 1, "text": "UP"   } },
+              "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null }, { "color": "green", "value": 1 }
+          ]},
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "id": 2,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center",
+                   "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto" },
+      "title": "pg-node-2 (Standby 1)",
+      "targets": [{
+        "expr": "up{job=\"postgres_exporter_node2\"}",
+        "legendFormat": "pg-node-2", "refId": "A"
+      }],
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "options": { "0": { "color": "red",   "index": 0, "text": "DOWN" },
+                           "1": { "color": "green", "index": 1, "text": "UP"   } },
+              "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null }, { "color": "green", "value": 1 }
+          ]}
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "id": 3,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center",
+                   "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto" },
+      "title": "pg-node-3 (Standby 2)",
+      "targets": [{
+        "expr": "up{job=\"postgres_exporter_node3\"}",
+        "legendFormat": "pg-node-3", "refId": "A"
+      }],
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "options": { "0": { "color": "red", "index": 0, "text": "KO" },
+                           "1": { "color": "green", "index": 1, "text": "OK" },
+                           "2": { "color": "green", "index": 2, "text": "OK" },
+                           "3": { "color": "green", "index": 3, "text": "OK" } },
+              "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null }, { "color": "green", "value": 1 }
+          ]}
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "id": 4,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center",
+                   "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto" },
+      "title": "Membres etcd actifs",
+      "targets": [{
+        "expr": "count(up{job=\"etcd\"} == 1)",
+        "legendFormat": "etcd UP", "refId": "A"
+      }],
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "yellow", "value": 1 },
+            { "color": "green", "value": 2 }
+          ]},
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "id": 5,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center",
+                   "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto" },
+      "title": "Standbys actifs (HAProxy :5001)",
+      "targets": [{
+        "expr": "haproxy_backend_active_servers{proxy=\"postgresql-replica\"}",
+        "legendFormat": "Standbys", "refId": "A"
+      }],
+      "type": "stat"
+    },
+    {
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101, "title": "Lag de Réplication — v_replication_status", "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false, "axisColorMode": "text",
+            "axisLabel": "Secondes", "axisPlacement": "auto",
+            "barAlignment": 0, "drawStyle": "line",
+            "fillOpacity": 10, "gradientMode": "none",
+            "lineInterpolation": "smooth", "lineWidth": 2,
+            "pointSize": 5, "scaleDistribution": { "type": "linear" },
+            "showPoints": "never", "spanNulls": false
+          },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 5 },
+            { "color": "red", "value": 30 }
+          ]},
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 10,
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" },
+                   "tooltip": { "mode": "multi", "sort": "desc" } },
+      "title": "Lag Réplication (secondes) — Seuils OK<5s / WARN<30s / CRIT≥30s",
+      "targets": [
+        {
+          "expr": "aciertech_replication_lag_seconds{job=\"postgres_exporter_node2\"}",
+          "legendFormat": "pg-node-2 lag (s)", "refId": "A"
+        },
+        {
+          "expr": "aciertech_replication_lag_seconds{job=\"postgres_exporter_node3\"}",
+          "legendFormat": "pg-node-3 lag (s)", "refId": "B"
+        },
+        {
+          "expr": "scalar(5)",  "legendFormat": "Seuil WARNING (5s)",  "refId": "C",
+          "hide": false
+        },
+        {
+          "expr": "scalar(30)", "legendFormat": "Seuil CRITICAL (30s)", "refId": "D"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth",
+            "lineWidth": 2, "showPoints": "never"
+          },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "id": 11,
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" },
+                   "tooltip": { "mode": "multi", "sort": "desc" } },
+      "title": "Lag Réplication (octets WAL en attente)",
+      "targets": [
+        {
+          "expr": "aciertech_replication_lag_bytes{job=\"postgres_exporter_node2\"}",
+          "legendFormat": "pg-node-2 (bytes)", "refId": "A"
+        },
+        {
+          "expr": "aciertech_replication_lag_bytes{job=\"postgres_exporter_node3\"}",
+          "legendFormat": "pg-node-3 (bytes)", "refId": "B"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 102, "title": "HAProxy — Connexions et Backends", "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "showPoints": "never"
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "id": 20,
+      "options": { "legend": { "calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom" },
+                   "tooltip": { "mode": "multi" } },
+      "title": "HAProxy — Sessions actives par backend",
+      "targets": [
+        {
+          "expr": "haproxy_backend_current_sessions{proxy=\"postgresql-primary\"}",
+          "legendFormat": "Primary (port 5000)", "refId": "A"
+        },
+        {
+          "expr": "haproxy_backend_current_sessions{proxy=\"postgresql-replica\"}",
+          "legendFormat": "Replica (port 5001)", "refId": "B"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "id": 21,
+      "options": { "legend": { "calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom" } },
+      "title": "pgBouncer — Pool aciertech_db (mode=transaction)",
+      "targets": [
+        {
+          "expr": "pgbouncer_pools_cl_active{database=\"aciertech_db\"}",
+          "legendFormat": "Clients actifs", "refId": "A"
+        },
+        {
+          "expr": "pgbouncer_pools_cl_waiting{database=\"aciertech_db\"}",
+          "legendFormat": "Clients en attente", "refId": "B"
+        },
+        {
+          "expr": "pgbouncer_pools_sv_active{database=\"aciertech_db\"}",
+          "legendFormat": "Serveurs actifs", "refId": "C"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "id": 103, "title": "Archivage WAL (pgbackrest archive-async)", "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 2 },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 24 },
+      "id": 30,
+      "title": "WAL archivés/échoués (pg_stat_archiver)",
+      "targets": [
+        {
+          "expr": "rate(pg_stat_archiver_archived_count{job=\"postgres_exporter_node1\"}[5m])",
+          "legendFormat": "WAL archivés/s (node1)", "refId": "A"
+        },
+        {
+          "expr": "rate(pg_stat_archiver_failed_count{job=\"postgres_exporter_node1\"}[5m])",
+          "legendFormat": "Échecs archivage/s (node1)", "refId": "B"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 120 },
+            { "color": "red", "value": 300 }
+          ]}
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 24 },
+      "id": 31,
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Dernier WAL archivé il y a",
+      "targets": [{
+        "expr": "time() - pg_stat_archiver_last_archived_time{job=\"postgres_exporter_node1\"}",
+        "legendFormat": "Délai dernière archive (s)", "refId": "A"
+      }],
+      "type": "stat"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["aciertech", "postgresql", "patroni", "ha", "replication"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": { "type": "prometheus", "uid": "prometheus-aciertech" },
+        "definition": "label_values(up{job=~\"postgres_exporter_node.*\"}, node)",
+        "hide": 0, "includeAll": true, "multi": false,
+        "name": "node", "options": [], "query": {
+          "query": "label_values(up{job=~\"postgres_exporter_node.*\"}, node)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2, "sort": 1, "type": "query", "label": "Nœud"
+      }
+    ]
+  },
+  "time": { "from": "now-3h", "to": "now" },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "AcierTech — Cluster HA Patroni & Réplication",
+  "uid": "aciertech-cluster-ha",
+  "version": 1
+}

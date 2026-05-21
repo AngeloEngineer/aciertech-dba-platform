@@ -1,0 +1,25 @@
+# =============================================================================
+# GRAFANA PROVISIONING — Datasource Prometheus
+# Fichier : 04-monitoring/grafana/provisioning/datasources/prometheus.yml
+# Auto-provisionné au démarrage de Grafana (chemin configuré dans grafana.ini)
+# =============================================================================
+ 
+apiVersion: 1
+ 
+datasources:
+  - name:      Prometheus-AcierTech
+    type:      prometheus
+    uid:       prometheus-aciertech      # UID fixe référencé dans les dashboards JSON
+    access:    proxy
+    url:       http://monitoring-server:9090
+    isDefault: true
+    jsonData:
+      httpMethod:          POST
+      timeInterval:        15s           # Correspond à scrape_interval Prometheus
+      queryTimeout:        60s
+      exemplarTraceIdDestinations: []
+      prometheusType:      Prometheus
+      prometheusVersion:   "2.x"
+      # Annotation des périodes de backup (corrélation avec dashboards)
+      manageAlerts: false
+    editable: false   # Ne pas permettre la modification via l'UI

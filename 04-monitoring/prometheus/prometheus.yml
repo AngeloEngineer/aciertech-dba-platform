@@ -1,0 +1,181 @@
+# =============================================================================
+# PROMETHEUS — AcierTech Industries S.A. — INF1620
+# Fichier : 04-monitoring/prometheus/prometheus.yml
+# Rôle    : Configuration principale Prometheus (scrape + alerting + rétention)
+# Serveur : monitoring-server (même réseau que pg-node-1/2/3)
+# UTC+0   : Lomé, pas de DST
+# =============================================================================
+
+global:
+  scrape_interval:     15s        # Fréquence de collecte par défaut
+  evaluation_interval: 15s        # Fréquence d'évaluation des règles d'alerte
+  scrape_timeout:      10s
+  external_labels:
+    environment: "production"
+    site:        "Lomé-AcierTech"
+    project:     "INF1620"
+
+# ---------------------------------------------------------------------------
+# Rétention : 15 jours (passer --storage.tsdb.retention.time=15d au démarrage)
+# Volume estimé : ~2 Go pour la charge IoT de 47 capteurs
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Alertmanager
+# ---------------------------------------------------------------------------
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "monitoring-server:9093"
+      timeout: 10s
+
+# ---------------------------------------------------------------------------
+# Fichiers de règles d'alerte
+# ---------------------------------------------------------------------------
+rule_files:
+  - "rules/postgresql_alerts.yml"
+  - "rules/backup_alerts.yml"
+  - "rules/data_quality_alerts.yml"
+  - "rules/node_alerts.yml"
+
+# ---------------------------------------------------------------------------
+# SCRAPE CONFIGS
+# ---------------------------------------------------------------------------
+scrape_configs:
+
+  # ── Prometheus lui-même ───────────────────────────────────────────────────
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+    relabel_configs:
+      - target_label: instance
+        replacement: "monitoring-server"
+
+  # ── postgres_exporter — pg-node-1 (primaire HAProxy cible RW) ────────────
+  - job_name: "postgres_exporter_node1"
+    static_configs:
+      - targets: ["pg-node-1:9187"]
+        labels:
+          node:     "pg-node-1"
+          role:     "primary"
+          cluster:  "aciertech-patroni"
+    metrics_path: /metrics
+    scrape_interval: 15s
+    scrape_timeout:  10s
+
+  # ── postgres_exporter — pg-node-2 (standby 1) ────────────────────────────
+  - job_name: "postgres_exporter_node2"
+    static_configs:
+      - targets: ["pg-node-2:9187"]
+        labels:
+          node:     "pg-node-2"
+          role:     "standby"
+          cluster:  "aciertech-patroni"
+    metrics_path: /metrics
+    scrape_interval: 15s
+    scrape_timeout:  10s
+
+  # ── postgres_exporter — pg-node-3 (standby 2) ────────────────────────────
+  - job_name: "postgres_exporter_node3"
+    static_configs:
+      - targets: ["pg-node-3:9187"]
+        labels:
+          node:     "pg-node-3"
+          role:     "standby"
+          cluster:  "aciertech-patroni"
+    metrics_path: /metrics
+    scrape_interval: 15s
+    scrape_timeout:  10s
+
+  # ── node_exporter — tous les nœuds PostgreSQL ────────────────────────────
+  - job_name: "node_exporter_pg"
+    static_configs:
+      - targets:
+          - "pg-node-1:9100"
+          - "pg-node-2:9100"
+          - "pg-node-3:9100"
+        labels:
+          cluster: "aciertech-patroni"
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: "([^:]+):\\d+"
+        target_label: node
+
+  # ── node_exporter — monitoring-server ────────────────────────────────────
+  - job_name: "node_exporter_monitoring"
+    static_configs:
+      - targets: ["localhost:9100"]
+        labels:
+          node: "monitoring-server"
+
+  # ── Patroni API — état cluster HA ─────────────────────────────────────────
+  # Patroni expose /metrics en format Prometheus depuis v3.x
+  # Sinon : scrape /patroni (JSON) via json_exporter
+  - job_name: "patroni"
+    static_configs:
+      - targets:
+          - "pg-node-1:8008"
+          - "pg-node-2:8008"
+          - "pg-node-3:8008"
+        labels:
+          cluster: "aciertech-patroni"
+    metrics_path: /metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: "([^:]+):\\d+"
+        target_label: node
+    # Si Patroni ne supporte pas /metrics nativement, commenter ce bloc
+    # et utiliser blackbox_exporter sur /health et /patroni à la place.
+
+  # ── HAProxy — stats page ──────────────────────────────────────────────────
+  # haproxy_exporter lit la socket stats (ou l'URL CSV /stats;csv)
+  - job_name: "haproxy"
+    static_configs:
+      - targets: ["pg-node-1:9101"]   # haproxy_exporter sur le nœud HAProxy
+        labels:
+          node: "pg-node-1"
+
+  # ── pgBouncer — pgbouncer_exporter ───────────────────────────────────────
+  - job_name: "pgbouncer"
+    static_configs:
+      - targets: ["pg-node-1:9127"]   # pgbouncer_exporter port 9127
+        labels:
+          node: "pg-node-1"
+
+  # ── etcd — métriques cluster etcd ────────────────────────────────────────
+  - job_name: "etcd"
+    static_configs:
+      - targets:
+          - "pg-node-1:2381"   # etcd expose metrics sur port 2381 par défaut
+          - "pg-node-2:2381"
+          - "pg-node-3:2381"
+        labels:
+          cluster: "aciertech-etcd"
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: "([^:]+):\\d+"
+        target_label: node
+
+  # ── Pushgateway — métriques push (scripts 03-backup) ─────────────────────
+  # Reçoit les métriques aciertech_backup_* depuis backup_full.sh,
+  # verify_backup.sh, test_restore.sh (PUSHGATEWAY_URL=http://monitoring-server:9091)
+  - job_name: "pushgateway"
+    honor_labels: true          # Préserver les labels poussés par les scripts
+    static_configs:
+      - targets: ["monitoring-server:9091"]
+    # Métriques attendues (définies dans 03-backup/scripts/) :
+    #   aciertech_backup_verify_status
+    #   aciertech_backup_last_success_timestamp
+    #   aciertech_backup_full_count
+    #   aciertech_backup_repo_size_bytes
+    #   aciertech_backup_oldest_full_age_hours
+    #   aciertech_backup_verify_last_run_timestamp
+    #   aciertech_backup_test_status
+    #   aciertech_backup_test_last_run_timestamp
+
+  # ── Textfile collector — fallback si Pushgateway indisponible ─────────────
+  # node_exporter lit /var/lib/node_exporter/textfile_collector/*.prom
+  # verify_backup.sh et test_restore.sh écrivent pgbackrest.prom dans ce répertoire.
+  # Ces métriques remontent automatiquement via le job node_exporter_pg ci-dessus.
+  # Aucune config supplémentaire requise ici.

@@ -1,0 +1,176 @@
+# =============================================================================
+# PROMETHEUS RULES — Alertes Backup pgbackrest
+# Fichier : 04-monitoring/prometheus/rules/backup_alerts.yml
+#
+# IMPORTANT : Ces règles CONSOMMENT les métriques définies dans 03-backup/scripts/
+#   verify_backup.sh  → aciertech_backup_verify_*
+#   test_restore.sh   → aciertech_backup_test_*
+# NE PAS redéfinir ces métriques ici : elles sont produites par les scripts
+# et pushées vers Pushgateway (PUSHGATEWAY_URL=http://monitoring-server:9091)
+# ou écrites dans /var/lib/node_exporter/textfile_collector/pgbackrest.prom
+# =============================================================================
+
+groups:
+
+  # ---------------------------------------------------------------------------
+  # Groupe 1 : État des backups pgbackrest
+  # ---------------------------------------------------------------------------
+  - name: pgbackrest_backup_health
+    interval: 60s    # Réduit la charge — backups moins fréquents que métriques PG
+    rules:
+
+      # Vérification backup échouée (aciertech_backup_verify_status = 0)
+      - alert: BackupVerifyFailed
+        expr: aciertech_backup_verify_status == 0
+        for: 0m
+        labels:
+          severity: critical
+          team:     dba
+          category: backup
+        annotations:
+          summary:     "Vérification backup pgbackrest ÉCHOUÉE — stanza {{ $labels.stanza }}"
+          description: >
+            Le script verify_backup.sh a retourné un statut KO pour la stanza
+            {{ $labels.stanza }} sur {{ $labels.host }}.
+            Consulter : /var/log/pgbackrest/verify_backup.log
+            Commande manuelle : pgbackrest verify --stanza=aciertech --log-level-console=info
+          runbook: "https://wiki.aciertech/runbooks/backup-verify-failed"
+
+      # Test de restauration échoué (aciertech_backup_test_status = 0)
+      - alert: BackupRestoreTestFailed
+        expr: aciertech_backup_test_status == 0
+        for: 0m
+        labels:
+          severity: critical
+          team:     dba
+          category: backup
+        annotations:
+          summary:     "Test de restauration pgbackrest ÉCHOUÉ — stanza {{ $labels.stanza }}"
+          description: >
+            Le script test_restore.sh a retourné un statut KO sur {{ $labels.host }}.
+            L'un des 10 checks de cohérence a échoué (schémas, sensor_registry=47,
+            sensor_thresholds=47, validation_status, vue AI, fonctions DBA).
+            Consulter : /var/log/pgbackrest/test_restore.log et
+            dba_schema.backup_history WHERE backup_type='test_restore'.
+          runbook: "https://wiki.aciertech/runbooks/restore-test-failed"
+
+      # Dernier backup FULL trop ancien (> 8 jours — planning : dim 02h)
+      - alert: BackupFullTooOld
+        expr: >
+          (time() - aciertech_backup_last_success_timestamp{backup_type="full"}) / 3600 > 192
+        for: 30m
+        labels:
+          severity: critical
+          team:     dba
+          category: backup
+        annotations:
+          summary:     "Dernier backup FULL trop ancien : {{ $value | humanizeDuration }}"
+          description: >
+            Le dernier backup FULL réussi date de plus de 8 jours
+            (attendu : chaque dimanche à 02h UTC).
+            Stanza : {{ $labels.stanza }} | Host : {{ $labels.host }}.
+            Vérifier : dba_schema.backup_history WHERE backup_type='full' ORDER BY started_at DESC LIMIT 5;
+          runbook: "https://wiki.aciertech/runbooks/backup-too-old"
+
+      # Dernier backup DIFF trop ancien (> 26h — planning : lun-sam 02h)
+      - alert: BackupDiffTooOld
+        expr: >
+          (time() - aciertech_backup_last_success_timestamp{backup_type="diff"}) / 3600 > 26
+        for: 30m
+        labels:
+          severity: warning
+          team:     dba
+          category: backup
+        annotations:
+          summary:     "Dernier backup DIFF trop ancien : {{ $value | humanizeDuration }}"
+          description: >
+            Aucun backup DIFF réussi depuis plus de 26h. Stanza : {{ $labels.stanza }}.
+            Vérifier le crontab sur le nœud primaire et les logs pgbackrest.
+
+      # Espace dépôt NFS faible (repo_size_bytes > 200 Go — adapter selon capacité NFS)
+      - alert: BackupRepoSizeHigh
+        expr: aciertech_backup_repo_size_bytes > 214748364800   # 200 Gi
+        for: 1h
+        labels:
+          severity: warning
+          team:     dba
+          category: backup
+        annotations:
+          summary:     "Dépôt backup volumineux : {{ $value | humanizeBytes }}"
+          description: >
+            Le dépôt pgbackrest dépasse 200 Go. Vérifier la rétention
+            (retention-full=4 dans pgbackrest.conf). Le purge automatique
+            s'effectue après chaque nouveau backup FULL.
+            Capacité NFS à contrôler sur monitoring-server.
+
+      # Nombre de backups FULL insuffisant (< 2, risque de fenêtre PITR courte)
+      - alert: BackupFullCountLow
+        expr: aciertech_backup_full_count < 2
+        for: 1h
+        labels:
+          severity: warning
+          team:     dba
+          category: backup
+        annotations:
+          summary:     "Nombre de backups FULL insuffisant : {{ $value }}"
+          description: >
+            Moins de 2 backups FULL disponibles dans la stanza {{ $labels.stanza }}.
+            La fenêtre PITR est réduite. Un nouveau backup FULL sera déclenché
+            automatiquement par backup_diff.sh si aucun FULL de référence n'existe.
+
+      # Métrique de vérification trop ancienne (verify_backup.sh n'a pas tourné depuis > 25h)
+      - alert: BackupVerifyStale
+        expr: >
+          (time() - aciertech_backup_verify_last_run_timestamp) / 3600 > 25
+        for: 30m
+        labels:
+          severity: warning
+          team:     dba
+          category: backup
+        annotations:
+          summary:     "verify_backup.sh n'a pas tourné depuis > 25h"
+          description: >
+            Le script verify_backup.sh est planifié à 03h UTC quotidien.
+            Absence de mise à jour de la métrique aciertech_backup_verify_last_run_timestamp.
+            Vérifier le crontab sur pg-node-1 (crontab.aciertech) et les logs.
+
+  # ---------------------------------------------------------------------------
+  # Groupe 2 : Archivage WAL
+  # ---------------------------------------------------------------------------
+  - name: pgbackrest_wal
+    interval: 30s
+    rules:
+
+      # File d'attente WAL async trop longue (archive-async=y dans pgbackrest.conf)
+      # pg_stat_archiver.failed_count croissant indique des échecs d'archivage
+      - alert: WalArchiveFailing
+        expr: >
+          increase(pg_stat_archiver_failed_count{job=~"postgres_exporter_node.*"}[10m]) > 3
+        for: 5m
+        labels:
+          severity: critical
+          team:     dba
+          category: backup
+        annotations:
+          summary:     "Archivage WAL en échec sur {{ $labels.node }} : {{ $value }} échecs / 10min"
+          description: >
+            pgbackrest archive-async rapporte des échecs. Si l'archivage WAL est
+            bloqué, la stanza ne peut plus garantir le PITR.
+            Vérifier : pgbackrest check --stanza=aciertech
+            et les logs /var/log/pgbackrest/aciertech-archive-push-async.log
+
+      # Dernier WAL archivé il y a > 5 min (taux d'ingestion IoT élevé → WAL fréquent)
+      - alert: WalArchiveDelayed
+        expr: >
+          (time() - pg_stat_archiver_last_archived_time{job=~"postgres_exporter_node.*"}) > 300
+        for: 5m
+        labels:
+          severity: warning
+          team:     dba
+          category: backup
+        annotations:
+          summary:     "Archivage WAL inactif depuis {{ $value | humanizeDuration }} sur {{ $labels.node }}"
+          description: >
+            Le dernier WAL archivé date de plus de 5 minutes. Avec 47 capteurs IoT
+            en ingestion continue, l'archivage doit être actif en permanence.
+            Vérifier l'état de l'archive_command et la connectivité NFS.

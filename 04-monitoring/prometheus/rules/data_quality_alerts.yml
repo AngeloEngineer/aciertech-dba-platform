@@ -1,0 +1,247 @@
+# =============================================================================
+# PROMETHEUS RULES — Alertes Qualité de Données IoT
+# Fichier : 04-monitoring/prometheus/rules/data_quality_alerts.yml
+#
+# Sources de métriques (via queries.yaml → postgres_exporter) :
+#   - dba_schema.v_data_quality_dashboard  → agrégats par sensor_type / 1h glissante
+#   - dba_schema.v_silent_sensors          → capteurs sans émission > 3×expected_interval
+#   - iot_quarantine.anomaly_log            → volume anomalies
+#   - dba_schema.data_quality_snapshots     → snapshots 5min (pg_cron aciertech_quality_snapshot)
+#
+# Seuils métier AcierTech :
+#   - valid_rate < 70%  → CRITICAL (données IA compromises)
+#   - valid_rate < 85%  → WARNING
+#   - Capteur silencieux > 3×expected_interval → CRITICAL
+#   - Quarantaine > 30% des lectures → WARNING
+# =============================================================================
+
+groups:
+
+  # ---------------------------------------------------------------------------
+  # Groupe 1 : Taux de validation par type de capteur
+  # ---------------------------------------------------------------------------
+  - name: data_quality_validation
+    interval: 30s
+    rules:
+
+      # Taux de validation CRITIQUE (< 70%) par sensor_type
+      - alert: ValidationRateCritical
+        expr: >
+          aciertech_valid_rate_pct{job=~"postgres_exporter_node.*"} < 70
+        for: 5m
+        labels:
+          severity: critical
+          team:     data-quality
+          category: iot
+        annotations:
+          summary:     "Taux validation CRITIQUE pour {{ $labels.sensor_type }} : {{ $value }}%"
+          description: >
+            Le taux de validation des lectures brutes du type {{ $labels.sensor_type }}
+            est de {{ $value }}% (seuil critique : 70%) sur la fenêtre 1h glissante.
+            Le système IA de maintenance prédictive reçoit des données insuffisantes.
+            Vérifier : SELECT * FROM dba_schema.v_data_quality_dashboard WHERE sensor_type='{{ $labels.sensor_type }}';
+            et iot_quarantine.anomaly_log pour les codes raison dominants.
+          runbook: "https://wiki.aciertech/runbooks/validation-rate-critical"
+
+      # Taux de validation en AVERTISSEMENT (70–85%)
+      - alert: ValidationRateWarning
+        expr: >
+          aciertech_valid_rate_pct{job=~"postgres_exporter_node.*"} >= 70
+          and
+          aciertech_valid_rate_pct{job=~"postgres_exporter_node.*"} < 85
+        for: 10m
+        labels:
+          severity: warning
+          team:     data-quality
+          category: iot
+        annotations:
+          summary:     "Taux validation dégradé pour {{ $labels.sensor_type }} : {{ $value }}%"
+          description: >
+            Le taux de validation du type {{ $labels.sensor_type }} est de {{ $value }}%
+            (seuil warning : 85%). Surveiller l'évolution.
+
+      # Quality level CRITICAL ou NO_DATA dans v_data_quality_dashboard
+      # (aciertech_quality_level: 0=NO_DATA, 1=CRITICAL, 2=DEGRADED, 3=GOOD, 4=EXCELLENT)
+      - alert: QualityLevelCritical
+        expr: aciertech_quality_level{job=~"postgres_exporter_node.*"} <= 1
+        for: 5m
+        labels:
+          severity: critical
+          team:     data-quality
+          category: iot
+        annotations:
+          summary:     "Niveau qualité CRITICAL/NO_DATA pour {{ $labels.sensor_type }}"
+          description: >
+            La vue v_data_quality_dashboard indique un niveau {{ $labels.quality_level }}
+            pour le type {{ $labels.sensor_type }}. Score qualité moyen trop bas ou
+            aucune donnée reçue. Vérifier les capteurs du type concerné.
+
+      # Score qualité moyen anormalement bas (< 50) — fn_compute_quality_score
+      - alert: AvgQualityScoreLow
+        expr: >
+          aciertech_avg_quality_score{job=~"postgres_exporter_node.*"} < 50
+        for: 5m
+        labels:
+          severity: warning
+          team:     data-quality
+          category: iot
+        annotations:
+          summary:     "Score qualité moyen faible pour {{ $labels.sensor_type }} : {{ $value }}"
+          description: >
+            Le score qualité moyen des lectures {{ $labels.sensor_type }} est {{ $value }}/100.
+            Rappel scores fn_compute_quality_score :
+            NO_THRESHOLD=50, OUT_OF_RANGE=0, WARNING_LOW/HIGH=75, ZSCORE_ANOMALY=65.
+            Score<50 indique une proportion importante de lectures OUT_OF_RANGE.
+
+  # ---------------------------------------------------------------------------
+  # Groupe 2 : Capteurs silencieux (v_silent_sensors)
+  # ---------------------------------------------------------------------------
+  - name: silent_sensors
+    interval: 30s
+    rules:
+
+      # Capteur NEVER_SEEN (n'a jamais émis depuis l'installation)
+      - alert: SensorNeverSeen
+        expr: aciertech_never_seen_sensors_count{job=~"postgres_exporter_node.*"} > 0
+        for: 15m
+        labels:
+          severity: warning
+          team:     data-quality
+          category: iot
+        annotations:
+          summary:     "{{ $value }} capteur(s) enregistré(s) n'ayant jamais émis"
+          description: >
+            Des capteurs actifs (is_active=TRUE dans sensor_registry) n'ont jamais
+            envoyé de donnée. Vérifier leur câblage / commissioning.
+            Requête : SELECT * FROM dba_schema.v_silent_sensors WHERE silence_level='NEVER_SEEN';
+
+      # Capteur CRITICAL (silence > 6×expected_interval)
+      - alert: SensorSilenceCritical
+        expr: aciertech_critical_silent_sensors_count{job=~"postgres_exporter_node.*"} > 0
+        for: 0m
+        labels:
+          severity: critical
+          team:     data-quality
+          category: iot
+        annotations:
+          summary:     "{{ $value }} capteur(s) en silence CRITIQUE (> 6×intervalle)"
+          description: >
+            Au moins un capteur actif n'émet plus depuis > 6×son intervalle attendu.
+            Impact direct sur la v_ai_feature_set et le système de maintenance prédictive.
+            Requête : SELECT sensor_name, sensor_type, silence_level, silence_duration
+            FROM dba_schema.v_silent_sensors WHERE silence_level='CRITICAL';
+          runbook: "https://wiki.aciertech/runbooks/sensor-silent"
+
+      # Capteur WARNING (silence > 3×expected_interval)
+      - alert: SensorSilenceWarning
+        expr: aciertech_warning_silent_sensors_count{job=~"postgres_exporter_node.*"} > 2
+        for: 5m
+        labels:
+          severity: warning
+          team:     data-quality
+          category: iot
+        annotations:
+          summary:     "{{ $value }} capteur(s) en silence WARNING (> 3×intervalle)"
+          description: >
+            {{ $value }} capteurs n'ont pas émis depuis > 3×leur intervalle attendu
+            (fallback 300s si expected_interval_s NULL dans sensor_thresholds).
+
+      # Total capteurs silencieux anormal (> 5 sur 47)
+      - alert: ManySilentSensors
+        expr: >
+          (aciertech_critical_silent_sensors_count + aciertech_warning_silent_sensors_count)
+          > 5
+        for: 5m
+        labels:
+          severity: critical
+          team:     data-quality
+          category: iot
+        annotations:
+          summary:     "Trop de capteurs silencieux : {{ $value }}/47"
+          description: >
+            Plus de 5 capteurs sur 47 sont en silence simultané. Risque de défaillance
+            réseau IoT ou problème collectif (coupure alimentation, problème gateway).
+
+  # ---------------------------------------------------------------------------
+  # Groupe 3 : Volume de quarantaine
+  # ---------------------------------------------------------------------------
+  - name: quarantine_volume
+    interval: 60s
+    rules:
+
+      # Taux de quarantaine élevé (> 30% des lectures sur 1h)
+      - alert: QuarantineRateHigh
+        expr: >
+          aciertech_quarantined_count_1h{job=~"postgres_exporter_node.*"}
+          / (aciertech_total_readings_1h{job=~"postgres_exporter_node.*"} + 1)
+          > 0.30
+        for: 10m
+        labels:
+          severity: warning
+          team:     data-quality
+          category: iot
+        annotations:
+          summary:     "Taux de quarantaine élevé pour {{ $labels.sensor_type }} : {{ $value | humanizePercentage }}"
+          description: >
+            Plus de 30% des lectures {{ $labels.sensor_type }} sont envoyées en quarantaine
+            par le trigger trg_validate_sensor (score < 70).
+            Vérifier les seuils dans dba_schema.sensor_thresholds et les codes
+            d'anomalie dans iot_quarantine.anomaly_log.
+
+      # Explosion soudaine des anomalies (croissance > 500 sur 15min)
+      - alert: AnomalyLogSurge
+        expr: >
+          increase(aciertech_anomaly_log_total{job=~"postgres_exporter_node.*"}[15m]) > 500
+        for: 0m
+        labels:
+          severity: warning
+          team:     data-quality
+          category: iot
+        annotations:
+          summary:     "Pic d'anomalies IoT : +{{ $value }} en 15min"
+          description: >
+            La table iot_quarantine.anomaly_log a reçu plus de 500 nouvelles entrées
+            en 15 minutes. Pic probable sur un ou plusieurs types de capteurs.
+            Vérifier les capteurs de type température (fours) dont zscore_threshold=2.5.
+
+  # ---------------------------------------------------------------------------
+  # Groupe 4 : Vue matérialisée IA
+  # ---------------------------------------------------------------------------
+  - name: ai_feature_view
+    interval: 60s
+    rules:
+
+      # REFRESH CONCURRENTLY de v_ai_feature_set trop lent (> 30s → fn_refresh_ai_view RAISE WARNING)
+      - alert: AIFeatureViewRefreshSlow
+        expr: >
+          aciertech_ai_view_refresh_duration_seconds{job=~"postgres_exporter_node.*"} > 30
+        for: 0m
+        labels:
+          severity: warning
+          team:     dba
+          category: iot
+        annotations:
+          summary:     "REFRESH v_ai_feature_set lent : {{ $value | humanizeDuration }}"
+          description: >
+            fn_refresh_ai_view a détecté un REFRESH CONCURRENTLY > 30s et émis un
+            RAISE WARNING. Le système IA de maintenance prédictive consomme des données
+            potentiellement moins fraîches.
+            Vérifier la charge sur iot_clean.sensor_readings et les index V006.
+
+      # Vue matérialisée non rafraîchie depuis > 10min (pg_cron */5min)
+      - alert: AIFeatureViewStale
+        expr: >
+          (time() - aciertech_ai_view_last_refresh_timestamp{job=~"postgres_exporter_node.*"})
+          > 600
+        for: 5m
+        labels:
+          severity: warning
+          team:     dba
+          category: iot
+        annotations:
+          summary:     "v_ai_feature_set non rafraîchie depuis > 10min"
+          description: >
+            Le job pg_cron aciertech_refresh_ai_view (*/5min) ne semble pas s'exécuter.
+            Vérifier : SELECT * FROM cron.job_run_details WHERE jobname='aciertech_refresh_ai_view'
+            ORDER BY start_time DESC LIMIT 10;
+            Rappel : REFRESH CONCURRENTLY requiert autocommit (pg_cron natif OK).

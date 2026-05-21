@@ -1,0 +1,288 @@
+# =============================================================================
+# PROMETHEUS RULES — Alertes Nœuds Système (node_exporter)
+# Fichier : 04-monitoring/prometheus/rules/node_alerts.yml
+# Sources : node_exporter (CPU, RAM, disque, réseau, NFS)
+# Nœuds ciblés : pg-node-1, pg-node-2, pg-node-3, monitoring-server
+# =============================================================================
+
+groups:
+
+  # ---------------------------------------------------------------------------
+  # Groupe 1 : CPU
+  # ---------------------------------------------------------------------------
+  - name: node_cpu
+    interval: 30s
+    rules:
+
+      # CPU > 85% pendant 5 minutes
+      - alert: HighCPUUsage
+        expr: >
+          100 - (avg by(node) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 5m
+        labels:
+          severity: warning
+          team:     infra
+        annotations:
+          summary:     "CPU élevé sur {{ $labels.node }} : {{ $value | humanize }}%"
+          description: >
+            Utilisation CPU moyenne de {{ $value }}% sur 5min.
+            Sur les nœuds PostgreSQL, vérifier les requêtes lourdes via
+            pg_stat_statements et v_session_activity.
+            Sur pg-node-1 : vérifier aussi HAProxy et pgBouncer.
+
+      # CPU > 95% pendant 2 minutes (critique : risque de perte heartbeat Patroni)
+      - alert: CriticalCPUUsage
+        expr: >
+          100 - (avg by(node) (rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100) > 95
+        for: 2m
+        labels:
+          severity: critical
+          team:     infra
+        annotations:
+          summary:     "CPU CRITIQUE sur {{ $labels.node }} : {{ $value | humanize }}%"
+          description: >
+            CPU à {{ $value }}% pendant 2 minutes. Risque de perte de heartbeat
+            Patroni (API port 8008) pouvant déclencher un failover non nécessaire.
+            Action immédiate requise.
+
+      # Charge système (load average 5min) > 4× le nombre de vCPU
+      - alert: HighLoadAverage
+        expr: >
+          node_load5 / count by(node) (node_cpu_seconds_total{mode="idle"}) > 4
+        for: 5m
+        labels:
+          severity: warning
+          team:     infra
+        annotations:
+          summary:     "Charge système élevée sur {{ $labels.node }} : load5={{ $value | humanize }}"
+          description: >
+            La charge 5min est {{ $value }}× le nombre de vCPU disponibles.
+            Possible saturation I/O liée aux écritures IoT ou aux backups pgbackrest
+            (archive-async=y, process-max=2).
+
+  # ---------------------------------------------------------------------------
+  # Groupe 2 : Mémoire RAM
+  # ---------------------------------------------------------------------------
+  - name: node_memory
+    interval: 30s
+    rules:
+
+      # RAM utilisée > 85%
+      - alert: HighMemoryUsage
+        expr: >
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          team:     infra
+        annotations:
+          summary:     "RAM > 85% sur {{ $labels.node }} : {{ $value | humanizePercentage }}"
+          description: >
+            La mémoire disponible est faible. Sur les nœuds PostgreSQL, shared_buffers
+            et work_mem sont les principaux consommateurs. Vérifier aussi le cache
+            OS (bonne chose) vs le swap (mauvaise chose).
+
+      # RAM utilisée > 95% (risque OOM)
+      - alert: CriticalMemoryUsage
+        expr: >
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.95
+        for: 2m
+        labels:
+          severity: critical
+          team:     infra
+        annotations:
+          summary:     "RAM CRITIQUE sur {{ $labels.node }} : {{ $value | humanizePercentage }}"
+          description: >
+            Mémoire quasi épuisée. Risque d'OOM killer sur le processus PostgreSQL.
+            Un kill de postgres par l'OOM déclencherait un failover Patroni.
+
+      # Swap utilisé (PostgreSQL ne doit jamais swapper)
+      - alert: SwapUsed
+        expr: >
+          (node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team:     infra
+        annotations:
+          summary:     "Swap utilisé sur {{ $labels.node }} : {{ $value | humanizeBytes }}"
+          description: >
+            PostgreSQL utilise le swap, ce qui cause des latences sévères.
+            Vérifier vm.swappiness et la configuration shared_buffers.
+
+  # ---------------------------------------------------------------------------
+  # Groupe 3 : Disques et I/O
+  # ---------------------------------------------------------------------------
+  - name: node_disk
+    interval: 30s
+    rules:
+
+      # Partition pg_data (PGDATA) > 80% pleine
+      - alert: PGDataDiskSpaceWarning
+        expr: >
+          (1 - node_filesystem_avail_bytes{mountpoint="/var/lib/postgresql"}
+          / node_filesystem_size_bytes{mountpoint="/var/lib/postgresql"}) > 0.80
+        for: 10m
+        labels:
+          severity: warning
+          team:     infra
+          category: disk
+        annotations:
+          summary:     "Disque PGDATA {{ $labels.node }} à {{ $value | humanizePercentage }}"
+          description: >
+            Le volume /var/lib/postgresql est rempli à {{ $value | humanizePercentage }}.
+            Les jobs pg_cron de purge (purge_quarantine, purge_anomaly_log, etc.)
+            s'exécutent quotidiennement mais peuvent ne pas suffire si la charge IoT
+            a augmenté. Vérifier la taille de iot_raw.sensor_readings.
+            Seuil partitionnement : ~50M lignes (cf. partition_management.sql).
+
+      # Partition pg_data > 90% pleine (critique)
+      - alert: PGDataDiskSpaceCritical
+        expr: >
+          (1 - node_filesystem_avail_bytes{mountpoint="/var/lib/postgresql"}
+          / node_filesystem_size_bytes{mountpoint="/var/lib/postgresql"}) > 0.90
+        for: 5m
+        labels:
+          severity: critical
+          team:     infra
+          category: disk
+        annotations:
+          summary:     "Disque PGDATA CRITIQUE sur {{ $labels.node }} : {{ $value | humanizePercentage }}"
+          description: >
+            PostgreSQL peut se mettre en lecture seule ou crasher si le disque est plein.
+            Action immédiate : libérer de l'espace ou étendre le volume.
+          runbook: "https://wiki.aciertech/runbooks/disk-full-pgdata"
+
+      # Répertoire WAL > 75% de la partition pg_wal
+      - alert: WALDiskSpaceWarning
+        expr: >
+          (1 - node_filesystem_avail_bytes{mountpoint="/var/lib/postgresql/16/main/pg_wal"}
+          / node_filesystem_size_bytes{mountpoint="/var/lib/postgresql/16/main/pg_wal"}) > 0.75
+        for: 10m
+        labels:
+          severity: warning
+          team:     infra
+          category: disk
+        annotations:
+          summary:     "Espace WAL sous pression sur {{ $labels.node }}"
+          description: >
+            Le répertoire pg_wal est rempli à {{ $value | humanizePercentage }}.
+            Si l'archivage WAL (pgbackrest archive-push) est bloqué, PostgreSQL
+            cesse d'écrire. Vérifier le status d'archivage.
+
+      # NFS /var/lib/pgbackrest inaccessible ou plein
+      - alert: BackupNFSUnavailable
+        expr: >
+          node_filesystem_avail_bytes{mountpoint="/var/lib/pgbackrest"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          team:     infra
+          category: backup
+        annotations:
+          summary:     "NFS backup inaccessible sur {{ $labels.node }}"
+          description: >
+            Le montage NFS /var/lib/pgbackrest est inaccessible (0 octets disponibles
+            ou non monté). Les backups pgbackrest et l'archivage WAL sont interrompus.
+            repo1-path=/var/lib/pgbackrest dans pgbackrest.conf.
+
+      # I/O wait élevé (> 30%)
+      - alert: HighIOWait
+        expr: >
+          avg by(node) (rate(node_cpu_seconds_total{mode="iowait"}[5m])) * 100 > 30
+        for: 5m
+        labels:
+          severity: warning
+          team:     infra
+        annotations:
+          summary:     "I/O wait élevé sur {{ $labels.node }} : {{ $value | humanize }}%"
+          description: >
+            L'I/O wait CPU est de {{ $value }}%. Saturation possible du stockage.
+            Sur les nœuds PG : vérifier les écritures iot_raw (47 capteurs continus),
+            les VACUUM aggressifs (scale_factor=2% sur iot_raw) et les backups pgbackrest.
+
+      # Taux d'erreurs disque (reallocated sectors, etc.) — via smartd exposé par node_exporter
+      - alert: DiskReadErrors
+        expr: >
+          increase(node_disk_read_errors_total[1h]) > 10
+        for: 0m
+        labels:
+          severity: critical
+          team:     infra
+        annotations:
+          summary:     "Erreurs lecture disque sur {{ $labels.node }} : {{ $value }} en 1h"
+          description: >
+            Des erreurs de lecture disque ont été détectées. Risque de corruption des
+            fichiers PostgreSQL. Vérifier l'état SMART du disque.
+
+  # ---------------------------------------------------------------------------
+  # Groupe 4 : Réseau
+  # ---------------------------------------------------------------------------
+  - name: node_network
+    interval: 30s
+    rules:
+
+      # Nœud inaccessible (node_exporter down)
+      - alert: NodeExporterDown
+        expr: up{job=~"node_exporter.*"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          team:     infra
+        annotations:
+          summary:     "node_exporter inaccessible sur {{ $labels.node }}"
+          description: >
+            Le node_exporter ne répond plus sur {{ $labels.node }}.
+            Si le nœud est un pg-node-*, Patroni gère le failover.
+            Vérifier la connectivité réseau et l'état du service node_exporter.
+
+      # Erreurs réseau (drops / errors élevés)
+      - alert: NetworkErrors
+        expr: >
+          rate(node_network_receive_errs_total[5m])
+          + rate(node_network_transmit_errs_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          team:     infra
+        annotations:
+          summary:     "Erreurs réseau sur {{ $labels.node }} : {{ $value | humanize }}/s"
+          description: >
+            Des erreurs réseau sont détectées sur {{ $labels.node }}.
+            Impact possible sur la réplication PostgreSQL et l'ingestion IoT.
+
+  # ---------------------------------------------------------------------------
+  # Groupe 5 : Disponibilité services critiques
+  # ---------------------------------------------------------------------------
+  - name: service_availability
+    interval: 15s
+    rules:
+
+      # Service systemd postgres_exporter arrêté
+      - alert: PostgresExporterDown
+        expr: up{job=~"postgres_exporter_node.*"} == 0
+        for: 1m
+        labels:
+          severity: warning
+          team:     dba
+        annotations:
+          summary:     "postgres_exporter arrêté sur {{ $labels.node }}"
+          description: >
+            Le service postgres_exporter.service ne répond plus.
+            Les métriques PostgreSQL et les alertes DBA sont perdues pour ce nœud.
+            sudo systemctl status postgres_exporter
+
+      # Pushgateway inaccessible (métriques backup non disponibles)
+      - alert: PushgatewayDown
+        expr: up{job="pushgateway"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          team:     infra
+        annotations:
+          summary:     "Pushgateway inaccessible (monitoring-server:9091)"
+          description: >
+            Les scripts 03-backup/ ne peuvent plus pousser leurs métriques
+            (PUSHGATEWAY_URL=http://monitoring-server:9091).
+            Le fallback textfile collector (/var/lib/node_exporter/textfile_collector/)
+            est actif si node_exporter tourne sur les nœuds PG.
