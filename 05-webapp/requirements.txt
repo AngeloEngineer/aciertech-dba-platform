@@ -1,0 +1,39 @@
+# =============================================================================
+# REQUIREMENTS — AcierTech DBA Console · 05-webapp
+# Python >= 3.12 requis
+# Installer : pip install -r requirements.txt
+# =============================================================================
+
+# ── Web framework ─────────────────────────────────────────────────────────────
+fastapi==0.115.5
+uvicorn[standard]==0.32.1          # Serveur ASGI (websockets, http2, watchfiles)
+
+# ── Base de données — PostgreSQL 16 ──────────────────────────────────────────
+# psycopg3 (psycopg) : driver natif async, Python 3.12+, remplace asyncpg/psycopg2
+psycopg[binary]==3.2.3             # binary = libpq compilé, pas de dépendance système
+psycopg-pool==3.2.3                # Pool de connexions async compatible psycopg3
+
+# ── HTTP client async ─────────────────────────────────────────────────────────
+# Utilisé pour : Patroni API :8008, Prometheus :9090, Grafana :3000, etcd :2379
+httpx==0.27.2                      # Async HTTP, remplace aiohttp
+
+# ── Templates ────────────────────────────────────────────────────────────────
+jinja2==3.1.4
+
+# ── Configuration & validation ────────────────────────────────────────────────
+pydantic==2.10.3
+pydantic-settings==2.6.1           # Lecture .env, variables d'environnement
+python-dotenv==1.0.1
+
+# ── Sérialisation / parsing ───────────────────────────────────────────────────
+orjson==3.10.11                    # Sérialisation JSON rapide (remplace json stdlib)
+
+# ── Dates & durées ────────────────────────────────────────────────────────────
+python-dateutil==2.9.0.post0
+
+# ── Exécution subprocess async (scripts pgbackrest) ───────────────────────────
+# Natif asyncio — pas de dépendance supplémentaire nécessaire
+
+# ── Dev / Prod ────────────────────────────────────────────────────────────────
+# Pour le développement uniquement (ne pas installer en prod) :
+# watchfiles==0.24.0               # Hot reload (inclus dans uvicorn[standard])
