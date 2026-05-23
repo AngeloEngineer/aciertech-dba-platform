@@ -29,22 +29,40 @@
 `pgBackRest` `Prometheus` `Grafana` `FastAPI` `Docker`
 `PL/pgSQL` `Python` `Linux systemd` `POP!_OS 24.04`
 
-## Lancement rapide
+## Lancement rapide (Docker Compose — Windows & Linux)
+
+La façon la plus simple de démarrer est via la stack Docker Compose dans `05-webapp/`.  
+Tout est pré-intégré : PostgreSQL + mock-serveur + Grafana + console web.
+
+### Prérequis
+
+- **Docker Desktop** (WSL2 backend recommandé sur Windows)
+- **Git**
+
+### Étapes
 
 ```bash
-# 1. Copier les variables d'environnement
-cp .env.example .env
+# 1. Cloner le dépôt
+git clone https://github.com/AngeloEngineer/aciertech-dba-platform.git
+cd aciertech-dba-platform/05-webapp
 
-# 2. Démarrer l'infrastructure (etcd, HAProxy, Prometheus, Grafana)
-docker-compose up -d
+# 2. Copier les variables d'environnement
+cp .env.example docker/.env
 
-# 3. Initialiser la base
-sudo -u postgres bash 02-sql/init/00_create_database.sh
-bash 02-sql/init/01_run_migrations.sh
-
-# 4. Vérifier le cluster
-patronictl -c 01-infra/patroni/patroni-node1.yml list
+# 3. Lancer la stack complète
+docker compose up -d --build
 ```
+
+### Accès
+
+| Service     | URL                          |
+|-------------|------------------------------|
+| Webapp DBA  | http://localhost:8080        |
+| Grafana     | http://localhost:3000        |
+
+Grafana : `admin / admin`
+
+> **Note pour Windows** : Le fichier `.gitattributes` force les fins de ligne LF pour les scripts shell, évitant les erreurs sous conteneur Linux.
 
 ## Structure du projet
 
