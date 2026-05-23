@@ -1,0 +1,378 @@
+{% extends "base.html" %}
+{% block title %}Contrôle — AcierTech{% endblock %}
+{% block page_title %}Contrôle du cluster{% endblock %}
+{% block page_subtitle %}Actions Patroni manuelles · Basculement · Failover · Réinitialisation{% endblock %}
+
+{% block topbar_actions %}
+{{ super() }}
+<span class="badge badge-err badge-lg" style="animation:pulse 1.5s ease-in-out infinite">Production</span>
+{% endblock %}
+
+{% block content %}
+<div class="banner warning">
+  <svg class="banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+    <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+  </svg>
+  <div>
+    <strong>Page de contrôle critique</strong> — Les actions ci-dessous affectent l'ensemble du cluster de production PostgreSQL 16 HA.
+    Toutes les opérations sont journalisées dans le journal d'événements et les logs Patroni.
+  </div>
+</div>
+
+<div class="grid-60-40 mb-6">
+  <!-- Left: Topology + Log -->
+  <div>
+    <div class="card mb-4">
+      <div class="card-header">
+        <h3>
+          <span class="status-dot ok pulse"></span>
+          Topologie live
+        </h3>
+        <span class="badge badge-ghost badge-mono">3 nœuds</span>
+      </div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:stretch;gap:6px">
+          {% for i in range(3) %}
+          {% set nid = 'pg-node-' + (i+1)|string %}
+          <div class="node-card {% if i == 0 %}leader{% else %}replica{% endif %}">
+            <div class="node-head" style="padding:8px 10px">
+              <div>
+                <div class="node-name" style="font-size:12px">{{ nid }}</div>
+                <div style="font-size:10px;color:var(--text-tertiary);font-family:var(--font-mono);margin-top:1px">{{ '10.0.1.'+(11+i)|string }}:5432</div>
+              </div>
+              <span class="node-role {% if i == 0 %}leader{% else %}replica{% endif %}" style="font-size:8px;padding:2px 8px">
+                {% if i == 0 %}PRIMARY{% else %}REPLICA{% endif %}
+              </span>
+            </div>
+            <div class="node-meta" style="padding:6px 10px 8px;gap:2px 8px">
+              <div class="meta-item"><span class="m-label">Chrono.</span><span class="m-value" style="font-size:10.5px">1</span></div>
+              <div class="meta-item"><span class="m-label">Connexions</span><span class="m-value" style="font-size:10.5px">{{ connections | default('—') }}</span></div>
+              <div class="meta-item"><span class="m-label">Lag</span><span class="m-value" style="font-size:10.5px">{{ repl_lag | default('0') }}s</span></div>
+              <div class="meta-item"><span class="m-label">Santé</span><span class="status-dot ok" style="width:7px;height:7px"></span></div>
+            </div>
+          </div>
+          {% if i < 2 %}
+          <div class="repl-arrow" style="justify-content:center;padding:2px">
+            <svg viewBox="0 0 40 14" style="width:36px;height:12px">
+              <path d="M2 7h32M30 3l8 4-8 4" stroke="var(--text-tertiary)" stroke-width="1.5" fill="none" stroke-dasharray="4 3">
+                <animate attributeName="stroke-dashoffset" from="0" to="14" dur="1.2s" repeatCount="indefinite"/>
+              </path>
+            </svg>
+            <span class="repl-label" style="font-size:8px">WAL</span>
+          </div>
+          {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h3>
+          <span class="card-icon"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>
+          Journal d'événements
+        </h3>
+        <span class="badge badge-ghost badge-mono" style="font-size:10px">EN DIRECT</span>
+      </div>
+      <div class="card-body" style="padding:8px">
+        <div id="eventLog" class="terminal">
+<div class="t-line"><span class="t-ts">[{{ now() }}]</span><span class="t-info">INFO</span> Cluster initialisé — 3/3 nœuds en ligne</div>
+<div class="t-line"><span class="t-ts">[{{ now() }}]</span><span class="t-info">INFO</span> Primaire : pg-node-1 — Réplicas : pg-node-2, pg-node-3</div>
+<div class="t-line"><span class="t-ts">[{{ now() }}]</span><span class="t-info">INFO</span> Lag réplication : {{ repl_lag | default('0.02') }}s</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: Actions -->
+  <div style="display:flex;flex-direction:column;gap:12px">
+    <!-- Switchover -->
+    <div class="card">
+      <div class="card-header">
+        <h3>Basculement contrôlé</h3>
+        <span class="badge badge-info badge-mono">Planifié</span>
+      </div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:14px;line-height:1.5">
+          Transfert planifié du rôle PRIMARY vers un réplica. Zéro perte de données. Le cluster reste disponible.
+        </p>
+        <div class="form-group">
+          <label class="form-label">Nœud cible</label>
+          <select class="form-control" id="switchoverTarget">
+            <option value="pg-node-2">pg-node-2</option>
+            <option value="pg-node-3">pg-node-3</option>
+          </select>
+        </div>
+        <button class="btn btn-primary w-full btn-lg" onclick="openModal('switchoverModal')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          Lancer le basculement
+        </button>
+      </div>
+    </div>
+
+    <!-- Failover -->
+    <div class="card" style="border:1px solid rgba(242,139,130,.3)">
+      <div class="card-header" style="border-color:rgba(242,139,130,.15)">
+        <h3 style="color:var(--danger)">
+          <span class="card-icon"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
+          Forcer le failover
+        </h3>
+        <span class="badge badge-err badge-mono">Urgence</span>
+      </div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:14px;line-height:1.5">
+          Failover d'urgence sans garantie zéro perte de données. Utiliser uniquement si le PRIMARY est définitivement perdu.
+        </p>
+        <button class="btn btn-danger w-full btn-lg" onclick="openModal('failoverModal')">
+          Forcer le failover
+        </button>
+      </div>
+    </div>
+
+    <!-- Reinitialize -->
+    <div class="card">
+      <div class="card-header">
+        <h3>Réinitialiser le réplica</h3>
+        <span class="badge badge-violet badge-mono">Maintenance</span>
+      </div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:14px;line-height:1.5">
+          Réinitialiser un réplica à partir du PRIMARY actuel. PGDATA est effacé avant réplication complète.
+        </p>
+        <div class="kpi-grid kpi-grid-2">
+          <button class="btn btn-secondary w-full" onclick="openReinitModal('pg-node-2')">Réinit node-2</button>
+          <button class="btn btn-secondary w-full" onclick="openReinitModal('pg-node-3')">Réinit node-3</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pause/Resume -->
+    <div class="card">
+      <div class="card-header">
+        <h3>Pause / Reprise</h3>
+        <span class="badge badge-ghost badge-mono">Auto-failover</span>
+      </div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:14px;line-height:1.5">
+          Suspendre ou reprendre le failover automatique Patroni. Utile pendant les fenêtres de maintenance.
+        </p>
+        <div class="kpi-grid kpi-grid-2">
+          <button class="btn btn-ghost w-full" onclick="execPause(true)">Mettre en pause</button>
+          <button class="btn w-full" style="color:var(--text-primary);background:var(--success-bg);border:1px solid rgba(129,201,149,.3)" onclick="execPause(false)">Reprendre</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Switchover -->
+<div id="switchoverModal" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h2>Confirmer le basculement</h2>
+        <p>Le rôle PRIMARY sera transféré au nœud sélectionné. Le cluster reste disponible.</p>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div style="padding:12px;background:var(--bg-input);border-radius:var(--radius-md);margin-bottom:14px">
+        <div style="display:grid;gap:6px;font-size:13px">
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-tertiary)">Cible</span><span class="text-mono" id="switchoverTargetDisplay" style="font-weight:600">pg-node-2</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-tertiary)">Action</span><span class="text-mono">POST /api/cluster/switchover</span></div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Saisissez <span class="text-mono" style="font-weight:700">CONFIRM</span> pour continuer</label>
+        <input class="form-control form-control-mono" type="text" id="switchoverConfirm" placeholder="CONFIRM" autocomplete="off">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('switchoverModal')">Annuler</button>
+      <button class="btn btn-primary" id="btnSwitchover" disabled onclick="execSwitchover()">Confirmer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Failover -->
+<div id="failoverModal" class="modal-overlay">
+  <div class="modal" style="border:1px solid var(--danger)">
+    <div class="modal-header">
+      <div>
+        <h2 style="color:var(--danger)">Forcer le failover</h2>
+        <p>Cette action est irréversible et peut entraîner une perte de données si le PRIMARY est toujours actif.</p>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div class="banner error" style="margin-bottom:14px">
+        <svg class="banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+        <span>Utiliser uniquement en cas d'urgence. Vérifiez que le PRIMARY est définitivement perdu avant de continuer.</span>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Saisissez <span class="text-mono" style="font-weight:700;color:var(--danger)">FAILOVER-FORCE</span> pour continuer</label>
+        <input class="form-control form-control-mono" type="text" id="failoverConfirm" placeholder="FAILOVER-FORCE" autocomplete="off" style="border-color:var(--danger)">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('failoverModal')">Annuler</button>
+      <button class="btn btn-danger" id="btnFailover" disabled onclick="execFailover()">Exécuter le failover</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Reinit -->
+<div id="reinitModal" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h2>Réinitialiser le réplica</h2>
+        <p>Réinitialiser complètement le nœud sélectionné à partir du PRIMARY.</p>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div style="padding:12px;background:var(--bg-input);border-radius:var(--radius-md);margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;font-size:13px">
+          <span style="color:var(--text-tertiary)">Nœud cible</span>
+          <span class="text-mono" id="reinitTargetDisplay" style="font-weight:600">—</span>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Saisissez <span class="text-mono" style="font-weight:700">REINIT</span> pour continuer</label>
+        <input class="form-control form-control-mono" type="text" id="reinitConfirm" placeholder="REINIT" autocomplete="off">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('reinitModal')">Annuler</button>
+      <button class="btn btn-secondary" id="btnReinit" disabled onclick="execReinit()">Réinitialiser</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+var reinitNode = '';
+
+document.getElementById('switchoverTarget').addEventListener('change', function(){
+  document.getElementById('switchoverTargetDisplay').textContent = this.value;
+});
+document.getElementById('switchoverConfirm').addEventListener('input', function(){
+  document.getElementById('btnSwitchover').disabled = this.value !== 'CONFIRM';
+});
+document.getElementById('failoverConfirm').addEventListener('input', function(){
+  document.getElementById('btnFailover').disabled = this.value !== 'FAILOVER-FORCE';
+});
+document.getElementById('reinitConfirm').addEventListener('input', function(){
+  document.getElementById('btnReinit').disabled = this.value !== 'REINIT';
+});
+
+function openReinitModal(node){
+  reinitNode = node;
+  document.getElementById('reinitTargetDisplay').textContent = node;
+  document.getElementById('reinitConfirm').value = '';
+  document.getElementById('btnReinit').disabled = true;
+  openModal('reinitModal');
+}
+
+function logEvent(level, msg){
+  var log = document.getElementById('eventLog');
+  var cls = level === 'INFO' ? 't-info' : level === 'WARN' ? 't-warn' : 't-error';
+  var line = document.createElement('div');
+  line.className = 't-line';
+  var ts = new Date().toLocaleTimeString('fr-FR', {hour12:false});
+  line.innerHTML = '<span class="t-ts">['+ts+']</span> <span class="'+cls+'">'+level+'</span> '+msg;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function execSwitchover(){
+  var target = document.getElementById('switchoverTarget').value;
+  var btn = document.getElementById('btnSwitchover');
+  btn.disabled = true;
+  btn.textContent = 'En cours...';
+  logEvent('WARN', 'Basculement vers ' + target + ' initié');
+  try{
+    var r = await fetch('/api/cluster/switchover', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({leader: target})
+    });
+    var d = await r.json();
+    var ok = d.ok || d.success || r.ok;
+    logEvent(ok ? 'INFO' : 'ERROR', 'Basculement : ' + (d.message || d.detail || JSON.stringify(d)));
+    showToast(d.message || 'Basculement exécuté', ok ? 'success' : 'error');
+  }catch(e){
+    logEvent('ERROR', 'Erreur basculement : ' + e.message);
+    showToast('Erreur : ' + e.message, 'error');
+  }finally{
+    closeModal('switchoverModal');
+    btn.disabled = false;
+    btn.textContent = 'Confirmer';
+  }
+}
+
+async function execFailover(){
+  var btn = document.getElementById('btnFailover');
+  btn.disabled = true;
+  btn.textContent = 'En cours...';
+  logEvent('ERROR', 'FORCE FAILOVER initié');
+  try{
+    var r = await fetch('/api/cluster/failover', {method:'POST'});
+    var d = await r.json();
+    var ok = d.ok || d.success || r.ok;
+    logEvent(ok ? 'WARN' : 'ERROR', 'Failover : ' + (d.message || d.detail || JSON.stringify(d)));
+    showToast(d.message || 'Failover exécuté', ok ? 'warning' : 'error');
+  }catch(e){
+    logEvent('ERROR', 'Erreur failover : ' + e.message);
+    showToast('Erreur : ' + e.message, 'error');
+  }finally{
+    closeModal('failoverModal');
+    btn.disabled = false;
+    btn.textContent = 'Exécuter le failover';
+  }
+}
+
+async function execReinit(){
+  var btn = document.getElementById('btnReinit');
+  btn.disabled = true;
+  btn.textContent = 'En cours...';
+  logEvent('WARN', 'Réinitialisation ' + reinitNode + ' initiée');
+  try{
+    var r = await fetch('/api/cluster/reinit', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({member: reinitNode})
+    });
+    var d = await r.json();
+    var ok = d.ok || d.success || r.ok;
+    logEvent(ok ? 'INFO' : 'ERROR', 'Réinit ' + reinitNode + ' : ' + (d.message || d.detail || JSON.stringify(d)));
+    showToast(d.message || 'Réinitialisation lancée', ok ? 'success' : 'error');
+  }catch(e){
+    logEvent('ERROR', 'Erreur réinit : ' + e.message);
+    showToast('Erreur : ' + e.message, 'error');
+  }finally{
+    closeModal('reinitModal');
+    btn.disabled = false;
+    btn.textContent = 'Réinitialiser';
+  }
+}
+
+async function execPause(pause){
+  var action = pause ? 'pause' : 'resume';
+  logEvent('WARN', 'Action ' + action + ' initiée');
+  try{
+    var r = await fetch('/api/cluster/' + action, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'}
+    });
+    var d = await r.json();
+    var ok = d.ok || d.success || r.ok;
+    logEvent(ok ? 'INFO' : 'ERROR', action + ' : ' + (d.message || d.detail || JSON.stringify(d)));
+    showToast(d.message || (pause ? 'Pause' : 'Reprise') + ' exécutée', ok ? 'success' : 'error');
+  }catch(e){
+    logEvent('ERROR', 'Erreur ' + action + ' : ' + e.message);
+    showToast('Erreur : ' + e.message, 'error');
+  }
+}
+</script>
+{% endblock %}

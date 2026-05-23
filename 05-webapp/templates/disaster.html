@@ -1,0 +1,423 @@
+{% extends "base.html" %}
+{% block title %}Simulation de sinistre — AcierTech{% endblock %}
+{% block page_title %}Simulation de sinistre{% endblock %}
+{% block page_subtitle %}Démo interactive : crash, failover, corruption & restauration PITR{% endblock %}
+
+{% block topbar_actions %}
+{{ super() }}
+<button class="btn btn-danger btn-sm" onclick="execReset()" id="btnReset" title="Rétablir le cluster à l'état sain">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg>
+  Tout réinitialiser
+</button>
+{% endblock %}
+
+{% block content %}
+<!-- Cluster Health Banner -->
+<div id="healthBanner" class="banner success">
+  <span id="healthIcon">✓</span>
+  <span id="healthMessage"><strong>Cluster sain</strong> — Les 3 nœuds en marche. pg-node-1 est PRIMARY.</span>
+</div>
+
+<div class="grid-65-35 mb-6">
+  <!-- Left: Scenario cards -->
+  <div>
+    <div class="card mb-4">
+      <div class="card-header">
+        <h3>
+          <span class="card-icon"><svg viewBox="0 0 24 24"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/></svg></span>
+          Scénario 1 — Panne du nœud primaire
+        </h3>
+        <span class="badge badge-err badge-mono">Critique</span>
+      </div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;line-height:1.5">
+          <strong>Effet :</strong> Le nœud PostgreSQL PRIMARY tombe subitement.
+          Les écritures échouent, la réplication s'arrête, le cluster passe en état dégradé.
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-danger" onclick="execCrash('primary')" id="btnCrashPrimary">
+            Crash primaire
+          </button>
+          <button class="btn btn-primary" onclick="execFailover()" id="btnFailover" disabled>
+            Failover → pg-node-2
+          </button>
+          <span class="badge badge-ghost badge-mono" style="align-self:center" id="step1Status">Étape 1 → Crash</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-header">
+        <h3>
+          <span class="card-icon"><svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/></svg></span>
+          Scénario 2 — Panne d'un réplica + réinitialisation
+        </h3>
+        <span class="badge badge-warn badge-mono">Avertissement</span>
+      </div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;line-height:1.5">
+          <strong>Effet :</strong> Un nœud REPLICA perd la connectivité.
+          HAProxy le retire du pool. Le lag de réplication augmente.
+          Le réplica est réinitialisé à partir du PRIMARY.
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-warning" onclick="execCrash('replica')" id="btnCrashReplica" style="background:var(--warning);color:var(--text-inverse);border:none">
+            Crash réplica (node-3)
+          </button>
+          <button class="btn btn-secondary" onclick="execReinit()" id="btnReinit" disabled>
+            Réinitialiser node-3
+          </button>
+          <span class="badge badge-ghost badge-mono" style="align-self:center" id="step2Status">Étape 1 → Crash</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-header">
+        <h3>
+          <span class="card-icon"><svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01"/></svg></span>
+          Scénario 3 — Corruption de données + restauration PITR
+        </h3>
+        <span class="badge badge-err badge-mono">Critique</span>
+      </div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;line-height:1.5">
+          <strong>Effet :</strong> Une corruption est détectée dans la table sensor_data.
+          Les échecs de checksum s'enchaînent : les métriques qualité s'effondrent (valid_rate passe à 8%),
+          les lectures en quarantaine explosent. PITR restaure l'état antérieur à la corruption.
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-danger" onclick="execDataCorruption()" id="btnCorrupt">
+            Déclencher corruption
+          </button>
+          <button class="btn btn-primary" onclick="execPITR()" id="btnPITR" disabled>
+            Lancer restauration PITR
+          </button>
+          <span class="badge badge-ghost badge-mono" style="align-self:center" id="step3Status">Étape 1 → Corruption</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live topology mini-card -->
+    <div class="card">
+      <div class="card-header">
+        <h3>
+          <span class="card-icon"><svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/></svg></span>
+          Statut live du cluster
+        </h3>
+        <span class="refresh-indicator" id="topoIndicator">Interrogation 5s</span>
+      </div>
+      <div class="card-body" id="liveTopology">
+        <div style="display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:center;gap:6px">
+          {% for i in range(3) %}
+          {% set nid = 'pg-node-' + (i+1)|string %}
+          <div class="node-card {% if i == 0 %}leader{% else %}replica{% endif %}" id="topo-{{ nid }}">
+            <div class="node-head" style="padding:8px 10px">
+              <div class="node-name" style="font-size:12px">{{ nid }}</div>
+              <span class="node-role {% if i == 0 %}leader{% else %}replica{% endif %}" style="font-size:8px;padding:2px 8px" id="role-{{ nid }}">
+                {% if i == 0 %}PRIMARY{% else %}REPLICA{% endif %}
+              </span>
+            </div>
+            <div class="node-meta" style="padding:6px 10px 8px;gap:2px">
+              <div class="meta-item"><span class="m-label">État</span><span class="status-dot ok" id="state-{{ nid }}"></span></div>
+              <div class="meta-item"><span class="m-label">Chrono.</span><span class="m-value" id="tl-{{ nid }}">1</span></div>
+            </div>
+          </div>
+          {% if i < 2 %}
+          <div class="repl-arrow" style="padding:2px">
+            <svg viewBox="0 0 36 12" style="width:32px;height:10px">
+              <path d="M2 6h28M26 3l8 3-8 3" stroke="var(--text-tertiary)" stroke-width="1.5" fill="none" stroke-dasharray="3 2">
+                <animate attributeName="stroke-dashoffset" from="0" to="10" dur="1s" repeatCount="indefinite"/>
+              </path>
+            </svg>
+          </div>
+          {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: Event Log -->
+  <div>
+    <div class="card" style="height:100%;display:flex;flex-direction:column">
+      <div class="card-header">
+        <h3>
+          <span class="card-icon"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>
+          Chronologie du sinistre
+        </h3>
+        <span class="badge badge-ghost badge-mono" id="eventCount">0 événements</span>
+      </div>
+      <div class="card-body" style="flex:1;padding:8px;display:flex;flex-direction:column">
+        <div id="eventLog" class="terminal" style="flex:1;max-height:none;font-size:11px">
+          <div class="t-line"><span class="t-ts">[{{ now("%H:%M:%S") }}]</span><span class="t-info">INFO</span> Simulation de sinistre prête</div>
+          <div class="t-line"><span class="t-ts">[{{ now("%H:%M:%S") }}]</span><span class="t-info">INFO</span> Cluster : 3/3 sain, leader : pg-node-1</div>
+          <div class="t-line"><span class="t-ts">[{{ now("%H:%M:%S") }}]</span><span class="t-info">INFO</span> Cliquez sur les boutons des scénarios pour simuler des sinistres</div>
+        </div>
+        <div style="margin-top:8px;display:flex;gap:6px">
+          <button class="btn btn-sm btn-ghost w-full" onclick="refreshEvents()">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+            Rafraîchir
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Unified Grafana iframe -->
+<div class="iframe-wrap">
+  <div class="iframe-header">
+    <h3>Grafana — Cluster HA & Réplication</h3>
+    <span class="refresh-indicator" style="margin-left:auto">Auto-rafraîchissement</span>
+  </div>
+  <iframe src="{{ grafana_cluster_url | default(grafana_iframe_url(grafana_uid_cluster)) }}" height="400" frameborder="0" loading="lazy" title="Grafana Cluster"></iframe>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+/* ── State ── */
+var polling = false;
+
+/* ── Disaster API calls ── */
+async function execCrash(type) {
+  var url = type === 'primary' ? '/api/disaster/crash-primary' : '/api/disaster/crash-replica';
+  var btn = type === 'primary' ? document.getElementById('btnCrashPrimary') : document.getElementById('btnCrashReplica');
+  var statusEl = type === 'primary' ? document.getElementById('step1Status') : document.getElementById('step2Status');
+  btn.disabled = true;
+  statusEl.textContent = '⚠ SINISTRE';
+  statusEl.style.color = 'var(--warning)';
+  try {
+    var r = await fetch(url, {method:'POST'});
+    var d = await r.json();
+    if (d.success) {
+      showToast(d.message, 'error');
+      updateUI();
+      if (type === 'primary') {
+        document.getElementById('btnFailover').disabled = false;
+      } else {
+        document.getElementById('btnReinit').disabled = false;
+      }
+    }
+  } catch(e) {
+    showToast('Erreur : '+e.message, 'error');
+    btn.disabled = false;
+  }
+}
+
+async function execFailover() {
+  var btn = document.getElementById('btnFailover');
+  var statusEl = document.getElementById('step1Status');
+  btn.disabled = true;
+  btn.textContent = 'Failover en cours...';
+  try {
+    var r = await fetch('/api/disaster/failover', {method:'POST'});
+    var d = await r.json();
+    if (d.success) {
+      showToast(d.message, 'warning');
+      statusEl.textContent = '✓ RÉTABLI';
+      statusEl.style.color = 'var(--success)';
+      updateUI();
+    }
+  } catch(e) {
+    showToast('Erreur : '+e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Failover → pg-node-2';
+  }
+}
+
+async function execReinit() {
+  var btn = document.getElementById('btnReinit');
+  var statusEl = document.getElementById('step2Status');
+  btn.disabled = true;
+  btn.textContent = 'Réinitialisation...';
+  try {
+    var r = await fetch('/api/disaster/reinit', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({node: 'pg-node-3'})
+    });
+    var d = await r.json();
+    if (d.success) {
+      showToast(d.message, 'success');
+      statusEl.textContent = '✓ RÉTABLI';
+      statusEl.style.color = 'var(--success)';
+      updateUI();
+    }
+  } catch(e) {
+    showToast('Erreur : '+e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Réinitialiser node-3';
+  }
+}
+
+async function execDataCorruption() {
+  var btn = document.getElementById('btnCorrupt');
+  var statusEl = document.getElementById('step3Status');
+  btn.disabled = true;
+  statusEl.textContent = '⚠ CORROMPU';
+  statusEl.style.color = 'var(--danger)';
+  try {
+    var r = await fetch('/api/disaster/data-corruption', {method:'POST'});
+    var d = await r.json();
+    if (d.success) {
+      showToast('Corruption de données déclenchée — métriques qualité effondrées', 'error');
+      document.getElementById('btnPITR').disabled = false;
+      updateUI();
+    }
+  } catch(e) {
+    showToast('Erreur : '+e.message, 'error');
+    btn.disabled = false;
+  }
+}
+
+async function execPITR() {
+  var btn = document.getElementById('btnPITR');
+  var statusEl = document.getElementById('step3Status');
+  btn.disabled = true;
+  btn.textContent = 'PITR en cours...';
+  try {
+    var r = await fetch('/api/disaster/pitr-restore', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({target_timestamp: new Date().toISOString()})
+    });
+    var d = await r.json();
+    if (d.success) {
+      showToast('Restauration PITR terminée — données récupérées', 'success');
+      statusEl.textContent = '✓ RÉTABLI';
+      statusEl.style.color = 'var(--success)';
+      updateUI();
+    }
+  } catch(e) {
+    showToast('Erreur : '+e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Lancer restauration PITR';
+  }
+}
+
+async function execReset() {
+  document.querySelectorAll('[id$="Status"]').forEach(function(el) {
+    el.textContent = 'Réinitialisation...';
+    el.style.color = 'var(--text-tertiary)';
+  });
+  try {
+    var r = await fetch('/api/disaster/reset', {method:'POST'});
+    var d = await r.json();
+    if (d.success) {
+      showToast('Cluster rétabli à l\'état sain', 'success');
+      document.getElementById('btnFailover').disabled = true;
+      document.getElementById('btnReinit').disabled = true;
+      document.getElementById('btnPITR').disabled = true;
+      document.getElementById('btnCorrupt').disabled = false;
+      document.getElementById('btnCrashPrimary').disabled = false;
+      document.getElementById('btnCrashReplica').disabled = false;
+      document.getElementById('step1Status').textContent = 'Prêt';
+      document.getElementById('step2Status').textContent = 'Prêt';
+      document.getElementById('step3Status').textContent = 'Prêt';
+      document.getElementById('step1Status').style.color = 'var(--text-tertiary)';
+      document.getElementById('step2Status').style.color = 'var(--text-tertiary)';
+      document.getElementById('step3Status').style.color = 'var(--text-tertiary)';
+      updateUI();
+    }
+  } catch(e) {
+    showToast('Erreur : '+e.message, 'error');
+  }
+}
+
+/* ── Live topology & events ── */
+async function updateUI() {
+  try {
+    var r = await fetch('/api/disaster/status');
+    if (!r.ok) return;
+    var d = await r.json();
+
+    // Update health banner
+    var banner = document.getElementById('healthBanner');
+    var msg = document.getElementById('healthMessage');
+    var icon = document.getElementById('healthIcon');
+    if (d.active) {
+      banner.className = 'banner error';
+      icon.textContent = '⚠';
+      var downNodes = Object.entries(d.nodes).filter(function(e) { return e[1] !== 'running'; }).map(function(e) { return e[0]; });
+      var desc = d.scenario_description || 'Cluster dégradé';
+      msg.innerHTML = '<strong>Cluster dégradé</strong> — ' + desc;
+      if (downNodes.length) msg.innerHTML += ' <span class="badge badge-err badge-sm">HS : ' + downNodes.join(', ') + '</span>';
+    } else {
+      banner.className = 'banner success';
+      icon.textContent = '✓';
+      msg.innerHTML = '<strong>Cluster sain</strong> — Les 3 nœuds en marche. ' + d.leader + ' est PRIMARY.';
+    }
+
+    // Update topology cards
+    Object.entries(d.nodes).forEach(function(e) {
+      var node = e[0];
+      var state = e[1];
+      var stateDot = document.getElementById('state-' + node);
+      if (stateDot) {
+        stateDot.className = 'status-dot ' + (state === 'running' ? 'ok' : 'err');
+      }
+      var roleEl = document.getElementById('role-' + node);
+      if (roleEl) {
+        var isLeader = node === d.leader;
+        roleEl.textContent = isLeader ? 'PRIMARY' : 'REPLICA';
+        roleEl.className = 'node-role ' + (isLeader ? 'leader' : 'replica') + (state !== 'running' ? ' muted' : '');
+      }
+      var tlEl = document.getElementById('tl-' + node);
+      if (tlEl && d.nodes && d.nodes[node]) {
+        // Timeline not in this endpoint, keep what we have
+      }
+    });
+
+    // Update events
+    updateEventLog(d.events);
+    document.getElementById('eventCount').textContent = (d.events || []).length + ' événements';
+
+    // Update alert badges
+    if (d.alerts_count > 0) {
+      document.querySelector('[title="Alertes"] .bell-count') && (document.querySelector('[title="Alertes"] .bell-count').textContent = d.alerts_count);
+    }
+  } catch(e) {}
+}
+
+function updateEventLog(events) {
+  var log = document.getElementById('eventLog');
+  if (!events || !events.length) return;
+  log.innerHTML = events.map(function(e) {
+    var cls = e.level === 'INFO' ? 't-info' : e.level === 'WARN' ? 't-warn' : e.level === 'CRITICAL' ? 't-error' : 't-dim';
+    return '<div class="t-line"><span class="t-ts">[' + e.time + ']</span> <span class="' + cls + '">' + e.level + '</span> ' + e.message + '</div>';
+  }).join('');
+  log.scrollTop = log.scrollHeight;
+}
+
+async function refreshEvents() {
+  try {
+    var r = await fetch('/api/disaster/status');
+    var d = await r.json();
+    updateEventLog(d.events || []);
+    document.getElementById('eventCount').textContent = (d.events || []).length + ' événements';
+  } catch(e) {}
+}
+
+/* ── Polling ── */
+setInterval(updateUI, 5000);
+
+/* ── Initial load ── */
+setTimeout(updateUI, 1000);
+</script>
+
+<style>
+.btn-warning {
+  background: var(--warning);
+  color: var(--text-inverse);
+  border: none;
+}
+.btn-warning:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+.node-role.muted {
+  opacity: 0.4;
+}
+</style>
+{% endblock %}

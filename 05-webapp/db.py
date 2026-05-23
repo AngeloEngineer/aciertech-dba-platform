@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -45,36 +46,63 @@ async def init_pools() -> None:
     """
     Ouvre les deux pools de connexions au démarrage de l'application.
     À appeler dans le lifespan FastAPI (startup).
+    Les deux pools sont initialisés en parallèle pour réduire le temps
+    d'attente. Chaque pool a un timeout court (pg_pool_open_timeout)
+    pour ne pas bloquer le démarrage si les bases sont indisponibles.
     """
     global _pool_ro, _pool_admin
 
-    logger.info("Initialisation pool RO (aciertech_ro → HAProxy :%d)…",
-                settings.pg_haproxy_port_ro)
-    _pool_ro = psycopg_pool.AsyncConnectionPool(
-        conninfo=settings.dsn_ro,
-        min_size=settings.pg_pool_min_size,
-        max_size=settings.pg_pool_max_size,
-        timeout=settings.pg_pool_timeout,
-        kwargs={"row_factory": dict_row, "autocommit": True},
-        name="pool_ro",
-        open=False,
-    )
-    await _pool_ro.open(wait=True, timeout=15.0)
-    logger.info("Pool RO ouvert — %d connexions min.", settings.pg_pool_min_size)
+    async def _open_pool(
+        name: str,
+        dsn: str,
+        min_size: int,
+        max_size: int,
+        kwargs: dict | None = None,
+    ) -> psycopg_pool.AsyncConnectionPool | None:
+        try:
+            pool = psycopg_pool.AsyncConnectionPool(
+                conninfo=dsn,
+                min_size=min_size,
+                max_size=max_size,
+                timeout=settings.pg_pool_timeout,
+                kwargs=kwargs or {},
+                name=name,
+                open=False,
+            )
+            await asyncio.wait_for(
+                pool.open(wait=True, timeout=settings.pg_pool_open_timeout),
+                timeout=settings.pg_pool_open_timeout + 2.0,
+            )
+            logger.info("Pool %s ouvert — %d connexions min.", name, min_size)
+            return pool
+        except asyncio.TimeoutError:
+            logger.warning("Pool %s : timeout d'ouverture — mode dégradé", name)
+        except Exception as exc:
+            logger.error("Échec pool %s : %s", name, exc)
+        return None
 
-    logger.info("Initialisation pool ADMIN (postgres → HAProxy :%d)…",
-                settings.pg_haproxy_port_rw)
-    _pool_admin = psycopg_pool.AsyncConnectionPool(
-        conninfo=settings.dsn_admin,
-        min_size=1,
-        max_size=5,
-        timeout=settings.pg_pool_timeout,
-        kwargs={"row_factory": dict_row},
-        name="pool_admin",
-        open=False,
+    logger.info("Initialisation des pools PostgreSQL (timeout=%ss)...",
+                settings.pg_pool_open_timeout)
+
+    results = await asyncio.gather(
+        _open_pool(
+            "pool_ro", settings.dsn_ro,
+            settings.pg_pool_min_size, settings.pg_pool_max_size,
+            {"row_factory": dict_row, "autocommit": True},
+        ),
+        _open_pool(
+            "pool_admin", settings.dsn_admin,
+            1, 5,
+            {"row_factory": dict_row},
+        ),
+        return_exceptions=True,
     )
-    await _pool_admin.open(wait=True, timeout=15.0)
-    logger.info("Pool ADMIN ouvert.")
+
+    _pool_ro, _pool_admin = results[:2]
+    if _pool_ro is None:
+        logger.warning("L'application démarrera en mode dégradé (pool RO indisponible).")
+    if _pool_admin is None:
+        logger.warning("L'application démarrera en mode dégradé (pool ADMIN indisponible).")
 
 
 async def close_pools() -> None:

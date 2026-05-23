@@ -1,0 +1,674 @@
+{
+  "description": "Performances PostgreSQL 16 \u2014 Cache hit, TPS, locks, sessions actives \u2014 aciertech_db",
+  "editable": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "title": "Statistiques Globales aciertech_db",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.9
+              },
+              {
+                "color": "green",
+                "value": 0.95
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "id": 1,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "showThresholdLabels": true,
+        "showThresholdMarkers": true
+      },
+      "title": "Cache Hit Ratio \u2014 aciertech_db",
+      "targets": [
+        {
+          "expr": "pg_stat_database_blks_hit{datname=\"aciertech_db\",job=~\"postgres_exporter_node.*\"} / (pg_stat_database_blks_hit{datname=\"aciertech_db\",job=~\"postgres_exporter_node.*\"} + pg_stat_database_blks_read{datname=\"aciertech_db\",job=~\"postgres_exporter_node.*\"} + 1)",
+          "legendFormat": "Cache hit {{node}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 150
+              },
+              {
+                "color": "red",
+                "value": 180
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "Connexions actives (max=200)",
+      "targets": [
+        {
+          "expr": "pg_stat_database_numbackends{datname=\"aciertech_db\",job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "Connexions {{node}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "Sessions bloqu\u00e9es (locks)",
+      "targets": [
+        {
+          "expr": "aciertech_sessions_blocked_count{job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "Bloqu\u00e9es {{node}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "TPS (transactions/s) \u2014 aciertech_db",
+      "targets": [
+        {
+          "expr": "rate(pg_stat_database_xact_commit{datname=\"aciertech_db\",job=~\"postgres_exporter_node.*\"}[5m]) + rate(pg_stat_database_xact_rollback{datname=\"aciertech_db\",job=~\"postgres_exporter_node.*\"}[5m])",
+          "legendFormat": "TPS {{node}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
+      "id": 5,
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "Deadlocks d\u00e9tect\u00e9s (5min)",
+      "targets": [
+        {
+          "expr": "increase(pg_stat_database_deadlocks{datname=\"aciertech_db\",job=~\"postgres_exporter_node.*\"}[5m])",
+          "legendFormat": "Deadlocks {{node}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "id": 6,
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "Requ\u00eate la plus longue (secondes)",
+      "targets": [
+        {
+          "expr": "aciertech_long_query_seconds_max{job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "Max query (s) {{node}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "id": 101,
+      "title": "TPS & I/O dans le temps",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "lineInterpolation": "smooth"
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 7
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "title": "Transactions / seconde (commits + rollbacks) \u2014 aciertech_db",
+      "targets": [
+        {
+          "expr": "rate(pg_stat_database_xact_commit{datname=\"aciertech_db\",job=\"postgres_exporter_node1\"}[5m])",
+          "legendFormat": "Commits/s (node1)",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(pg_stat_database_xact_rollback{datname=\"aciertech_db\",job=\"postgres_exporter_node1\"}[5m])",
+          "legendFormat": "Rollbacks/s (node1)",
+          "refId": "B"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2
+          },
+          "unit": "Bps"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 7
+      },
+      "id": 11,
+      "title": "I/O Buffers PostgreSQL (blks hit/read par seconde)",
+      "targets": [
+        {
+          "expr": "rate(pg_stat_database_blks_hit{datname=\"aciertech_db\",job=\"postgres_exporter_node1\"}[5m])",
+          "legendFormat": "Blocs depuis cache/s",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(pg_stat_database_blks_read{datname=\"aciertech_db\",job=\"postgres_exporter_node1\"}[5m])",
+          "legendFormat": "Lectures disque/s",
+          "refId": "B"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "id": 102,
+      "title": "Sessions actives \u2014 v_session_activity (via queries.yaml)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 20,
+      "title": "Sessions par \u00e9tat (active / idle / idle in transaction)",
+      "targets": [
+        {
+          "expr": "aciertech_sessions_active_count{job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "Active {{node}}",
+          "refId": "A"
+        },
+        {
+          "expr": "aciertech_sessions_idle_count{job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "Idle {{node}}",
+          "refId": "B"
+        },
+        {
+          "expr": "aciertech_sessions_idle_in_transaction_count{job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "Idle in txn {{node}}",
+          "refId": "C"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "lineInterpolation": "smooth"
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "id": 21,
+      "title": "Verrous en attente par type (pg_locks)",
+      "targets": [
+        {
+          "expr": "pg_locks_count{datname=\"aciertech_db\",granted=\"false\",job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "En attente - {{mode}} ({{node}})",
+          "refId": "A"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "id": 103,
+      "title": "VACUUM / AUTOVACUUM \u2014 iot_raw & iot_clean",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "lineWidth": 2
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      },
+      "id": 30,
+      "title": "Autovacuum / Autoanalyze actifs (pg_stat_user_tables)",
+      "targets": [
+        {
+          "expr": "count by (job) (pg_stat_user_tables_last_autovacuum{schemaname=~\"iot_raw|iot_clean|iot_quarantine\",job=~\"postgres_exporter_node.*\"} > (time() - 3600))",
+          "legendFormat": "Tables VACUUM <1h ({{job}})",
+          "refId": "A"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "lineWidth": 2
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "id": 31,
+      "title": "Tuples morts (dead tuples) \u2014 tables IoT",
+      "targets": [
+        {
+          "expr": "pg_stat_user_tables_n_dead_tup{schemaname=\"iot_raw\",relname=\"sensor_readings\",job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "iot_raw.sensor_readings dead tuples {{node}}",
+          "refId": "A"
+        },
+        {
+          "expr": "pg_stat_user_tables_n_dead_tup{schemaname=\"iot_clean\",relname=\"sensor_readings\",job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "iot_clean.sensor_readings dead tuples {{node}}",
+          "refId": "B"
+        }
+      ],
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": [
+    "aciertech",
+    "postgresql",
+    "performance",
+    "sessions",
+    "locks"
+  ],
+  "templating": {
+    "list": [
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus-aciertech"
+        },
+        "definition": "label_values(up{job=~\"postgres_exporter_node.*\"}, node)",
+        "hide": 0,
+        "includeAll": true,
+        "multi": false,
+        "name": "node",
+        "options": [],
+        "refresh": 2,
+        "sort": 1,
+        "type": "query",
+        "label": "N\u0153ud"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "timezone": "utc",
+  "title": "AcierTech \u2014 Performances PostgreSQL",
+  "uid": "aciertech-pg-performance",
+  "version": 1
+}

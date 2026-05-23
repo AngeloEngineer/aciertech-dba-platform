@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     pg_pool_min_size:     int = 2
     pg_pool_max_size:     int = 10
     pg_pool_timeout:      float = 30.0         # Attente max pour obtenir une connexion
+    pg_pool_open_timeout: float = 2.0          # Timeout max pour ouvrir le pool au démarrage
     pg_connect_timeout:   int   = 5            # Timeout connexion TCP
     pg_statement_timeout: int   = 30000        # 30s max par requête webapp (ms)
 
@@ -201,7 +202,7 @@ class Settings(BaseSettings):
             f"password={self.pg_password_ro} "
             f"application_name=aciertech_webapp_ro "
             f"connect_timeout={self.pg_connect_timeout} "
-            f"options=-c statement_timeout={self.pg_statement_timeout}"
+            f"options='-c statement_timeout={self.pg_statement_timeout}'"
         )
 
     @cached_property

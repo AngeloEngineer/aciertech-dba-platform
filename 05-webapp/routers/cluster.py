@@ -1,32 +1,21 @@
 # =============================================================================
-# ROUTER QUALITY — AcierTech DBA Console · 05-webapp/routers/quality.py
+# ROUTER CLUSTER — AcierTech DBA Console · 05-webapp/routers/cluster.py
 #
-# Métriques de qualité de données pour les 47 capteurs IoT.
+# État HA Patroni — 3 nœuds PostgreSQL 16 avec réplication streaming.
 #
 # Sources de données :
-#   • dba_schema.v_data_quality_dashboard  → agrégats par sensor_type / 1h glissante
-#   • dba_schema.v_silent_sensors          → capteurs is_active sans émission > 3×intervalle
-#   • iot_quarantine.anomaly_log            → codes anomalie (OUT_OF_RANGE, ZSCORE_ANOMALY…)
-#   • iot_quarantine.rejected_readings      → lectures rejetées récentes
-#   • dba_schema.data_quality_snapshots     → historique snapshots pg_cron */5min
-#   • iot_raw.ingestion_errors             → erreurs d'ingestion
-#   • cron.job_run_details                 → statut jobs pg_cron aciertech_*
+#   • Patroni REST API (port 8008) — topologie, santé, switchover/failover
+#   • dba_schema.v_replication_status — lag, état, LSN par standby
+#   • dba_schema.v_session_activity — connexions actives
+#   • etcd API (port 2379) — santé des 3 membres
+#   • HAProxy stats (port 7000) — statut des backends
 #
-# Action :
-#   POST /api/quality/refresh-ai-view
-#     → Appelle dba_schema.fn_refresh_ai_view()
-#     → REFRESH MATERIALIZED VIEW CONCURRENTLY iot_clean.v_ai_feature_set
-#     → REQUIERT autocommit=True (interdit dans une transaction explicite)
-#     → pg_cron fait ce refresh toutes les 5min (aciertech_refresh_ai_view)
-#
-# Logique de scoring fn_compute_quality_score (définie en 02-sql/functions/) :
-#   NO_THRESHOLD  → score 50
-#   OUT_OF_RANGE  → score 0
-#   WARNING_LOW   → score 75
-#   WARNING_HIGH  → score 75
-#   ZSCORE_ANOMALY → score 65 (fenêtre Z-score 1h sur iot_raw WHERE valid)
-#   Combiné       → score 55
-#   VALID         → score 100
+# Endpoints POST (proxy vers Patroni) :
+#   POST /api/cluster/switchover → contrôlé
+#   POST /api/cluster/failover   → forcé
+#   POST /api/cluster/reinit     → réinitialisation standby
+#   POST /api/cluster/pause      → suspend auto-failover
+#   POST /api/cluster/resume     → reprend auto-failover
 # =============================================================================
 
 from __future__ import annotations
@@ -35,419 +24,364 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 
 from config import settings
-from db import fetchall_ro, fetchone_admin, fetchone_ro
+from db import fetchall_ro, fetchone_ro
+from tpl import templates
 
-logger = logging.getLogger("aciertech.quality")
-router = APIRouter(prefix="", tags=["quality"])
-templates = Jinja2Templates(directory="templates")
+logger = logging.getLogger("aciertech.cluster")
+router = APIRouter(prefix="", tags=["cluster"])
 
 
 # ── Route HTML ────────────────────────────────────────────────────────────────
 
-@router.get("/quality", response_class=HTMLResponse, name="quality")
-async def quality_page(request: Request):
+@router.get("/cluster", response_class=HTMLResponse, name="cluster")
+async def cluster_page(request: Request):
     """
-    Page quality.html — Data Quality IoT complète.
-    Charge toutes les données côté serveur pour le premier rendu.
+    Page cluster.html — topologie HA, réplication, HAProxy, etcd.
     """
-    # 1. Dashboard global (v_data_quality_dashboard)
-    dashboard_rows = await _fetch_dashboard()
+    members, pause_mode = await _fetch_patroni_topology(request)
+    replication_rows = await _fetch_replication_status()
+    etcd_members = await _fetch_etcd_health(request)
+    session_summary = await _fetch_session_summary()
 
-    # 2. Résumé global
-    summary = await fetchone_ro(
-        """
-        SELECT
-            ROUND(AVG(valid_rate_pct)::numeric, 1)     AS avg_valid_rate,
-            ROUND(AVG(avg_quality_score)::numeric, 1)  AS avg_score,
-            SUM(total_readings)                         AS total_readings_1h,
-            SUM(quarantined_count)                      AS total_quarantined_1h,
-            SUM(error_count)                            AS total_errors_1h,
-            SUM(sensors_active)                         AS total_sensors_active,
-            SUM(sensors_silent)                         AS total_sensors_silent
-        FROM dba_schema.v_data_quality_dashboard
-        """
-    )
-
-    # 3. Capteurs silencieux (v_silent_sensors)
-    silent_sensors = await _fetch_silent_sensors()
-    silent_summary = await fetchone_ro(
-        """
-        SELECT
-            COUNT(*) FILTER (WHERE silence_level = 'CRITICAL')   AS critical_count,
-            COUNT(*) FILTER (WHERE silence_level = 'WARNING')    AS warning_count,
-            COUNT(*) FILTER (WHERE silence_level = 'NEVER_SEEN') AS never_seen_count
-        FROM dba_schema.v_silent_sensors
-        """
-    )
-
-    # 4. Anomalies récentes (1h)
-    anomalies = await _fetch_anomalies(limit=20)
-
-    # 5. Statut refresh v_ai_feature_set (via pg_cron)
-    ai_refresh = await _fetch_ai_refresh_status()
-
-    # 6. Derniers snapshots qualité
-    snapshots = await fetchall_ro(
-        """
-        SELECT
-            snapshot_at,
-            sensor_type,
-            ROUND(valid_rate::numeric, 1)      AS valid_rate,
-            total_readings,
-            valid_count,
-            quarantined_count,
-            ROUND(avg_quality_score::numeric, 1) AS avg_quality_score
-        FROM dba_schema.data_quality_snapshots
-        WHERE snapshot_at >= NOW() - INTERVAL '1 hour'
-        ORDER BY snapshot_at DESC, sensor_type
-        LIMIT 50
-        """
-    )
+    # Compute replication_lag_ms from replication data
+    lag_s = 0.0
+    if replication_rows:
+        lag_values = [
+            r.get("lag_seconds") or r.get("replay_lag", "0")
+            for r in replication_rows
+        ]
+        lag_s = max((float(v) for v in lag_values if v is not None), default=0.0)
 
     ctx = {
-        "request":         request,
-        "dashboard_rows":  dashboard_rows,
-        "summary":         summary or {},
-        "silent_sensors":  silent_sensors,
-        "silent_summary":  silent_summary or {},
-        "anomalies":       anomalies,
-        "ai_refresh":      ai_refresh,
-        "snapshots":       snapshots,
-        "grafana_quality_url": settings.grafana_iframe_url(
-            settings.grafana_uid_quality
+        "request":               request,
+        "members":               members,
+        "pause_mode":            pause_mode,
+        "replication_rows":      replication_rows,
+        "replication_lag_ms":    f"{lag_s * 1000:.0f}",
+        "cluster_status_text":   "Patroni — 3 nœuds HA",
+        "cluster_status_class":  "success",
+        "active_alerts_count":   0,
+        "total_sensors":         47,
+        "valid_rate":            "—",
+        "session_summary":       session_summary,
+        "etcd_members":          etcd_members,
+        "grafana_cluster_url":   settings.grafana_iframe_url(
+            settings.grafana_uid_cluster
         ),
     }
-    return templates.TemplateResponse("quality.html", ctx)
+    return templates.TemplateResponse("cluster.html", ctx)
 
 
-# ── API : Dashboard qualité ───────────────────────────────────────────────────
+# ── API : Topologie ───────────────────────────────────────────────────────────
 
-@router.get("/api/quality/dashboard", tags=["quality"])
-async def api_quality_dashboard():
+@router.get("/api/cluster/topology", tags=["cluster"])
+async def api_cluster_topology(request: Request):
     """
-    Métriques agrégées par sensor_type depuis v_data_quality_dashboard.
-    Fenêtre 1h glissante — mis à jour par pg_cron aciertech_quality_snapshot (*/5min).
-    Colonnes clés : valid_rate_pct, avg_quality_score, quality_level,
-    sensors_active, sensors_silent.
+    Topologie complète du cluster Patroni depuis GET /cluster.
+    Retourne la liste des membres avec rôle, état, host, timeline.
     """
-    rows = await _fetch_dashboard()
-    summary = await fetchone_ro(
-        """
-        SELECT
-            ROUND(AVG(valid_rate_pct)::numeric, 1)                  AS global_valid_rate,
-            ROUND(AVG(avg_quality_score)::numeric, 1)               AS global_avg_score,
-            SUM(total_readings)                                      AS total_readings_1h,
-            SUM(valid_count)                                         AS total_valid_1h,
-            SUM(quarantined_count)                                   AS total_quarantined_1h,
-            SUM(error_count)                                         AS total_errors_1h,
-            COUNT(DISTINCT sensor_type)                              AS sensor_type_count,
-            COUNT(*) FILTER (WHERE quality_level = 'EXCELLENT')      AS excellent_count,
-            COUNT(*) FILTER (WHERE quality_level = 'GOOD')           AS good_count,
-            COUNT(*) FILTER (WHERE quality_level = 'DEGRADED')       AS degraded_count,
-            COUNT(*) FILTER (WHERE quality_level IN ('CRITICAL','NO_DATA')) AS critical_count
-        FROM dba_schema.v_data_quality_dashboard
-        """
-    )
-    return {"sensor_types": rows, "summary": summary or {}}
-
-
-async def _fetch_dashboard() -> list[dict]:
-    return await fetchall_ro(
-        """
-        SELECT
-            sensor_type,
-            quality_level,
-            COALESCE(total_readings,   0) AS total_readings,
-            COALESCE(valid_count,      0) AS valid_count,
-            COALESCE(quarantined_count,0) AS quarantined_count,
-            COALESCE(error_count,      0) AS error_count,
-            COALESCE(valid_rate_pct,   0) AS valid_rate_pct,
-            ROUND(COALESCE(avg_quality_score, 0)::numeric, 1) AS avg_quality_score,
-            COALESCE(sensors_active,   0) AS sensors_active,
-            COALESCE(sensors_silent,   0) AS sensors_silent,
-            last_reading_at
-        FROM dba_schema.v_data_quality_dashboard
-        ORDER BY sensor_type
-        """
-    )
-
-
-@router.get("/api/quality/silent", tags=["quality"])
-async def api_silent_sensors():
-    """
-    Capteurs silencieux depuis dba_schema.v_silent_sensors.
-    Niveaux : NEVER_SEEN (jamais émis) / CRITICAL (>6×intervalle) /
-    WARNING (>3×intervalle).
-    Fallback expected_interval_s = 300s si NULL dans sensor_thresholds.
-    """
-    sensors = await _fetch_silent_sensors()
-    counts = await fetchone_ro(
-        """
-        SELECT
-            COUNT(*) FILTER (WHERE silence_level = 'CRITICAL')   AS critical,
-            COUNT(*) FILTER (WHERE silence_level = 'WARNING')    AS warning,
-            COUNT(*) FILTER (WHERE silence_level = 'NEVER_SEEN') AS never_seen,
-            COUNT(*)                                              AS total
-        FROM dba_schema.v_silent_sensors
-        """
-    )
-    return {"sensors": sensors, "counts": counts or {}}
-
-
-async def _fetch_silent_sensors() -> list[dict]:
-    return await fetchall_ro(
-        """
-        SELECT
-            sensor_id,
-            sensor_name,
-            sensor_type,
-            location,
-            silence_level,
-            last_reading_at,
-            EXTRACT(EPOCH FROM silence_duration)::int AS silence_duration_s,
-            expected_interval_s
-        FROM dba_schema.v_silent_sensors
-        ORDER BY
-            CASE silence_level
-                WHEN 'CRITICAL'  THEN 1
-                WHEN 'WARNING'   THEN 2
-                WHEN 'NEVER_SEEN' THEN 3
-                ELSE 4
-            END,
-            silence_duration DESC
-        """
-    )
-
-
-@router.get("/api/quality/anomalies", tags=["quality"])
-async def api_anomalies(limit: int = 50, window_minutes: int = 60):
-    """
-    Anomalies récentes depuis iot_quarantine.anomaly_log.
-    Codes générés par trg_validate_sensor via FOREACH string_to_array(reason,'|') :
-    OUT_OF_RANGE, WARNING_LOW, WARNING_HIGH, ZSCORE_ANOMALY, NO_THRESHOLD.
-    """
-    return {"anomalies": await _fetch_anomalies(limit=limit, window_minutes=window_minutes)}
-
-
-async def _fetch_anomalies(
-    limit: int = 50, window_minutes: int = 60
-) -> list[dict]:
-    return await fetchall_ro(
-        """
-        SELECT
-            al.sensor_id,
-            sr.sensor_name,
-            sr.sensor_type,
-            al.anomaly_type,
-            al.quality_score,
-            al.anomaly_details,
-            al.detected_at,
-            rr.value        AS rejected_value,
-            rr.unit         AS unit
-        FROM iot_quarantine.anomaly_log al
-        LEFT JOIN dba_schema.sensor_registry sr
-               ON sr.sensor_id = al.sensor_id
-        LEFT JOIN iot_quarantine.rejected_readings rr
-               ON rr.raw_reading_id = al.raw_reading_id
-        WHERE al.detected_at >= NOW() - (%(w)s || ' minutes')::interval
-        ORDER BY al.detected_at DESC
-        LIMIT %(l)s
-        """,
-        ({"w": window_minutes, "l": limit},),
-    )
-
-
-@router.get("/api/quality/anomaly-stats", tags=["quality"])
-async def api_anomaly_stats(window_minutes: int = 60):
-    """
-    Statistiques agrégées des anomalies par type et par sensor_type.
-    Utile pour les graphes barres dans le dashboard Grafana + webapp.
-    """
-    by_type = await fetchall_ro(
-        """
-        SELECT
-            anomaly_type,
-            COUNT(*)                    AS count,
-            COUNT(DISTINCT sensor_id)   AS distinct_sensors
-        FROM iot_quarantine.anomaly_log
-        WHERE detected_at >= NOW() - (%(w)s || ' minutes')::interval
-        GROUP BY anomaly_type
-        ORDER BY count DESC
-        """,
-        ({"w": window_minutes},),
-    )
-    by_sensor_type = await fetchall_ro(
-        """
-        SELECT
-            sr.sensor_type,
-            al.anomaly_type,
-            COUNT(*)                    AS count
-        FROM iot_quarantine.anomaly_log al
-        LEFT JOIN dba_schema.sensor_registry sr
-               ON sr.sensor_id = al.sensor_id
-        WHERE al.detected_at >= NOW() - (%(w)s || ' minutes')::interval
-        GROUP BY sr.sensor_type, al.anomaly_type
-        ORDER BY sr.sensor_type, count DESC
-        """,
-        ({"w": window_minutes},),
-    )
+    members, pause_mode = await _fetch_patroni_topology(request)
+    leader = next((m for m in members if m.get("role") == "leader"), None)
     return {
-        "by_anomaly_type": by_type,
-        "by_sensor_type":  by_sensor_type,
-        "window_minutes":  window_minutes,
+        "members":       members,
+        "leader":        leader,
+        "pause_mode":    pause_mode,
+        "member_count":  len(members),
+        "running_count": sum(1 for m in members if m.get("state") == "running"),
     }
 
 
-@router.get("/api/quality/sensors", tags=["quality"])
-async def api_sensors(sensor_type: str | None = None):
+async def _fetch_patroni_topology(request: Request) -> tuple[list, bool | None]:
     """
-    Liste des capteurs depuis dba_schema.sensor_registry + sensor_thresholds.
-    Retourne les seuils ISO 10816-3 (vibrations) et zscore_threshold=2.5 (fours).
+    Interroge Patroni API /cluster sur les 3 nœuds.
+    Retourne la liste des membres enrichis host + api_url.
     """
-    where = ""
-    params: tuple = ()
-    if sensor_type:
-        where = "WHERE sr.sensor_type = %(t)s"
-        params = ({"t": sensor_type},)
-
-    return await fetchall_ro(
-        f"""
-        SELECT
-            sr.sensor_id,
-            sr.sensor_name,
-            sr.sensor_type,
-            sr.location,
-            sr.is_active,
-            sr.installation_date,
-            st.min_value,
-            st.max_value,
-            st.warning_min,
-            st.warning_max,
-            st.zscore_threshold,
-            st.expected_interval_s,
-            st.unit
-        FROM dba_schema.sensor_registry sr
-        LEFT JOIN dba_schema.sensor_thresholds st
-               ON st.sensor_id = sr.sensor_id
-        {where}
-        ORDER BY sr.sensor_type, sr.sensor_name
-        """,
-        params,
-    )
+    for node_idx in range(1, 4):
+        try:
+            url = settings.patroni_url(node_idx, "/cluster")
+            resp = await request.app.state.http.get(url, timeout=settings.patroni_timeout)
+            if resp.status_code == 200:
+                data = resp.json()
+                members = data.get("members", [])
+                pause_mode = data.get("pause", False)
+                for m in members:
+                    if "host" not in m:
+                        m["host"] = m.get("addr", "").split(":")[0] if m.get("addr") else f"pg-node-{node_idx}"
+                    if "api_url" not in m:
+                        m["api_url"] = f":{settings.patroni_port}"
+                return members, pause_mode
+        except Exception as exc:
+            logger.debug("Patroni nœud %d indisponible : %s", node_idx, exc)
+            continue
+    return [], None
 
 
-@router.get("/api/quality/cron-jobs", tags=["quality"])
-async def api_cron_jobs():
+# ── API : Réplication ─────────────────────────────────────────────────────────
+
+@router.get("/api/cluster/replication", tags=["cluster"])
+async def api_cluster_replication():
     """
-    Statut des 8 jobs pg_cron aciertech_* (définis dans pg_cron_jobs.sql).
-    Jobs : quality_snapshot, refresh_ai_view, purge_quarantine,
-    purge_anomaly_log, purge_quality_snapshots, purge_audit_log,
-    purge_ingestion_errors, purge_cron_history.
+    État de la réplication depuis v_replication_status.
+    Retourne les standbys avec lag, LSN, sync_state.
     """
-    return await fetchall_ro(
+    rows = await _fetch_replication_status()
+    return {"replicas": rows, "count": len(rows)}
+
+
+async def _fetch_replication_status() -> list[dict]:
+    """
+    Interroge dba_schema.v_replication_status pour les métriques
+    de réplication streaming des standbys.
+    """
+    rows = await fetchall_ro(
         """
         SELECT
-            j.jobname,
-            j.schedule,
-            j.command,
-            j.active,
-            d.status                                          AS last_status,
-            d.start_time                                      AS last_start,
-            d.end_time                                        AS last_end,
+            application_name    AS name,
+            state,
+            sync_state,
             ROUND(
-                EXTRACT(EPOCH FROM (d.end_time - d.start_time))::numeric, 2
-            )                                                 AS last_duration_s,
-            d.return_message,
-            -- Comptage 24h
-            (
-                SELECT COUNT(*)
-                FROM cron.job_run_details d2
-                WHERE d2.jobid = j.jobid
-                  AND d2.status = 'failed'
-                  AND d2.start_time >= NOW() - INTERVAL '24 hours'
-            )                                                 AS failed_24h
-        FROM cron.job j
-        LEFT JOIN LATERAL (
-            SELECT *
-            FROM cron.job_run_details d
-            WHERE d.jobid = j.jobid
-            ORDER BY d.start_time DESC
-            LIMIT 1
-        ) d ON TRUE
-        WHERE j.jobname LIKE 'aciertech_%'
-        ORDER BY j.jobname
+                EXTRACT(EPOCH FROM lag_seconds)::numeric, 3
+            )                   AS lag_s,
+            lag_bytes,
+            sent_lsn,
+            replay_lsn,
+            CASE
+                WHEN lag_seconds IS NULL THEN 'unknown'
+                WHEN lag_seconds < INTERVAL '5 seconds'  THEN 'ok'
+                WHEN lag_seconds < INTERVAL '30 seconds' THEN 'warning'
+                ELSE 'critical'
+            END                 AS lag_level
+        FROM dba_schema.v_replication_status
+        ORDER BY application_name
         """
     )
+    return rows or []
 
 
-# ── API : Refresh v_ai_feature_set ───────────────────────────────────────────
+# ── API : Sessions / connexions ───────────────────────────────────────────────
 
-@router.post("/api/quality/refresh-ai-view", tags=["quality"])
-async def api_refresh_ai_view():
+@router.get("/api/cluster/sessions", tags=["cluster"])
+async def api_cluster_sessions():
     """
-    Déclenche manuellement dba_schema.fn_refresh_ai_view().
-    Cette fonction exécute :
-      REFRESH MATERIALIZED VIEW CONCURRENTLY iot_clean.v_ai_feature_set
-    Contrainte absolue : connexion en AUTOCOMMIT (impossibilité de REFRESH
-    CONCURRENTLY dans une transaction explicite).
-    Le pool_admin est utilisé avec autocommit=True.
-    La fonction retourne la durée en secondes et émet RAISE WARNING si > 30s.
-    pg_cron fait ce refresh toutes les 5min (aciertech_refresh_ai_view).
+    Résumé des sessions actives/idle depuis v_session_activity.
     """
-    logger.info("Refresh manuel v_ai_feature_set demandé")
-    result = await fetchone_admin(
-        # fn_refresh_ai_view() ne prend pas d'argument
-        # Elle vérifie l'index UNIQUE (idx_ai_feature_set_unique, V006)
-        # avant d'exécuter le REFRESH CONCURRENTLY
-        "SELECT dba_schema.fn_refresh_ai_view() AS duration_s",
-        autocommit=True,  # ← Obligatoire pour REFRESH CONCURRENTLY
-    )
-    if result is None:
-        raise HTTPException(
-            status_code=500,
-            detail="fn_refresh_ai_view() a retourné NULL ou une erreur.",
-        )
-    duration = float(result.get("duration_s") or 0)
-    warning = duration > 30.0
-    logger.info(
-        "Refresh v_ai_feature_set terminé en %.2fs %s",
-        duration, "(WARNING > 30s)" if warning else "",
-    )
-    return {
-        "success":    True,
-        "duration_s": round(duration, 2),
-        "warning":    warning,
-        "message":    (
-            f"REFRESH CONCURRENTLY terminé en {duration:.2f}s "
-            + ("⚠ > 30s" if warning else "✓")
-        ),
-    }
+    return await _fetch_session_summary()
 
 
-@router.get("/api/quality/ingestion-errors", tags=["quality"])
-async def api_ingestion_errors(limit: int = 30):
+async def _fetch_session_summary() -> dict:
     """
-    Erreurs d'ingestion IoT depuis iot_raw.ingestion_errors.
-    Ces erreurs sont loguées par trg_validate_sensor (EXCEPTION absorbée —
-    jamais de RAISE pour ne pas bloquer l'ingestion).
+    Compte les connexions par état depuis dba_schema.v_session_activity.
+    Retourne active, idle, idle_in_transaction, total.
     """
-    return await fetchall_ro(
+    row = await fetchone_ro(
         """
         SELECT
-            sensor_id,
-            sensor_type,
-            raw_value,
-            error_code,
-            error_message,
-            LEFT(error_context::text, 200) AS error_context,
-            occurred_at
-        FROM iot_raw.ingestion_errors
-        WHERE occurred_at >= NOW() - INTERVAL '24 hours'
-        ORDER BY occurred_at DESC
-        LIMIT %(l)s
-        """,
-        ({"l": limit},),
+            COUNT(*)                                        AS total,
+            COUNT(*) FILTER (WHERE state = 'active')        AS active,
+            COUNT(*) FILTER (WHERE state = 'idle')          AS idle,
+            COUNT(*) FILTER (WHERE state = 'idle in transaction'
+                             OR wait_event IS NOT NULL)     AS waiting
+        FROM dba_schema.v_session_activity
+        """
     )
+    return row or {"total": 0, "active": 0, "idle": 0, "waiting": 0}
+
+
+# ── API : etcd Health ─────────────────────────────────────────────────────────
+
+@router.get("/api/cluster/etcd-health", tags=["cluster"])
+async def api_etcd_health(request: Request):
+    """
+    Vérifie la santé des 3 membres etcd (port 2379).
+    Retourne l'état, le rôle et la version pour chaque nœud.
+    """
+    return {"members": await _fetch_etcd_health(request)}
+
+
+async def _fetch_etcd_health(request: Request) -> list[dict]:
+    """
+    Interroge GET /health sur chaque nœud etcd (port 2379).
+    Retourne la liste des membres avec leur état.
+    """
+    members = []
+    for node_idx in range(1, 4):
+        hosts = {1: settings.pg_node1_host, 2: settings.pg_node2_host, 3: settings.pg_node3_host}
+        host = hosts.get(node_idx, settings.pg_node1_host)
+        name = f"pg-node-{node_idx}"
+        try:
+            url = settings.etcd_url(node_idx)
+            resp = await request.app.state.http.get(url, timeout=settings.etcd_timeout)
+            ok = resp.status_code == 200
+            data = resp.json() if ok else {}
+            members.append({
+                "node": name,
+                "host": host,
+                "ok": ok,
+                "role": data.get("role", "UNKNOWN") if ok else "—",
+                "version": data.get("etcdVersion", "—") if ok else "—",
+            })
+        except Exception as exc:
+            logger.debug("etcd %s health check failed : %s", name, exc)
+            members.append({
+                "node": name,
+                "host": host,
+                "ok": False,
+                "role": "—",
+                "version": "—",
+            })
+    return members
+
+
+# ── API : HAProxy Stats ───────────────────────────────────────────────────────
+
+@router.get("/api/cluster/haproxy-stats", tags=["cluster"])
+async def api_haproxy_stats(request: Request):
+    """
+    Statistiques HAProxy depuis /stats;csv sur pg-node-1 (port 7000).
+    Retourne les backends postgresql-primary et postgresql-replica.
+    """
+    try:
+        auth = (settings.haproxy_stats_user, settings.haproxy_stats_password)
+        resp = await request.app.state.http.get(
+            settings.haproxy_stats_url, auth=auth, timeout=5.0
+        )
+        if resp.status_code != 200:
+            return {"ok": False, "error": f"HAProxy stats HTTP {resp.status_code}"}
+        raw = resp.text
+        lines = [l.strip() for l in raw.split("\n") if l.strip() and not l.startswith("#")]
+        backends = {}
+        for line in lines:
+            parts = line.split(",")
+            if len(parts) >= 18:
+                pxname = parts[0].strip("# ")
+                svname = parts[1]
+                status = parts[17]
+                if pxname not in backends:
+                    backends[pxname] = []
+                backends[pxname].append({"server": svname, "status": status})
+        return {"ok": True, "backends": backends}
+    except Exception as exc:
+        logger.warning("HAProxy stats request failed : %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
+# ── API : Switchover contrôlé ─────────────────────────────────────────────────
+
+@router.post("/api/cluster/switchover", tags=["cluster"])
+async def api_cluster_switchover(request: Request, body: dict | None = None):
+    """
+    Basculement contrôlé via Patroni POST /switchover.
+    Corps optionnel : {"leader": "pg-node-2", "member": "pg-node-2"}
+    """
+    target = (body or {}).get("leader") or (body or {}).get("member", "")
+    payload = {"leader": target} if target else {}
+
+    for node_idx in range(1, 4):
+        try:
+            url = settings.patroni_url(node_idx, "/switchover")
+            resp = await request.app.state.http.post(
+                url, json=payload, timeout=settings.patroni_timeout
+            )
+            if resp.status_code in (200, 202):
+                data = resp.json()
+                logger.warning("Switchover vers %s accepté (%s)", target, node_idx)
+                return {"success": True, "message": data.get("message", "Switchover initié")}
+        except Exception as exc:
+            logger.warning("Patroni %d switchover failed: %s", node_idx, exc)
+            continue
+
+    raise HTTPException(status_code=502, detail="Switchover impossible — Patroni injoignable")
+
+
+# ── API : Failover forcé ──────────────────────────────────────────────────────
+
+@router.post("/api/cluster/failover", tags=["cluster"])
+async def api_cluster_failover(request: Request):
+    """
+    Failover forcé via Patroni POST /failover.
+    Utiliser uniquement si le PRIMARY est définitivement perdu.
+    """
+    for node_idx in range(1, 4):
+        try:
+            url = settings.patroni_url(node_idx, "/failover")
+            resp = await request.app.state.http.post(url, timeout=settings.patroni_timeout)
+            if resp.status_code in (200, 202):
+                data = resp.json()
+                logger.critical("FAILOVER FORCÉ accepté (%s)", node_idx)
+                return {"success": True, "message": data.get("message", "Failover initié")}
+        except Exception as exc:
+            logger.warning("Patroni %d failover failed: %s", node_idx, exc)
+            continue
+
+    raise HTTPException(status_code=502, detail="Failover impossible — Patroni injoignable")
+
+
+# ── API : Réinitialisation standby ────────────────────────────────────────────
+
+@router.post("/api/cluster/reinit", tags=["cluster"])
+async def api_cluster_reinit(request: Request, body: dict):
+    """
+    Réinitialise un standby via Patroni POST /reinitialize.
+    Corps requis : {"member": "pg-node-2"}
+    """
+    member = body.get("member", "")
+    if not member:
+        raise HTTPException(status_code=400, detail="Paramètre 'member' requis")
+
+    for node_idx in range(1, 4):
+        try:
+            url = settings.patroni_url(node_idx, f"/reinitialize")
+            resp = await request.app.state.http.post(
+                url, json={"member": member}, timeout=settings.patroni_timeout
+            )
+            if resp.status_code in (200, 202):
+                logger.warning("Réinitialisation %s acceptée", member)
+                return {"success": True, "message": f"Réinitialisation de {member} initiée"}
+        except Exception as exc:
+            logger.warning("Patroni %d reinit failed: %s", node_idx, exc)
+            continue
+
+    raise HTTPException(status_code=502, detail="Réinitialisation impossible")
+
+
+# ── API : Pause / Resume auto-failover ────────────────────────────────────────
+
+@router.post("/api/cluster/pause", tags=["cluster"])
+async def api_cluster_pause(request: Request):
+    """
+    Suspend l'auto-failover Patroni via PATCH /config.
+    Utile pendant les fenêtres de maintenance.
+    """
+    return await _patch_patroni_config(request, {"pause": True})
+
+
+@router.post("/api/cluster/resume", tags=["cluster"])
+async def api_cluster_resume(request: Request):
+    """
+    Reprend l'auto-failover Patroni via PATCH /config.
+    """
+    return await _patch_patroni_config(request, {"pause": False})
+
+
+async def _patch_patroni_config(request: Request, payload: dict) -> dict:
+    """
+    Envoie une requête PATCH /config à Patroni pour modifier la configuration
+    dynamique (pause/resume principalement).
+    """
+    for node_idx in range(1, 4):
+        try:
+            url = settings.patroni_url(node_idx, "/config")
+            resp = await request.app.state.http.patch(
+                url, json=payload, timeout=settings.patroni_timeout
+            )
+            if resp.status_code in (200, 204):
+                action = "pause" if payload.get("pause") else "resume"
+                logger.warning("Auto-failover %s (%s)", action, node_idx)
+                return {"success": True, "message": f"Auto-failover {action} effectué"}
+        except Exception as exc:
+            logger.warning("Patroni %d PATCH config failed: %s", node_idx, exc)
+            continue
+
+    raise HTTPException(status_code=502, detail="Patroni config injoignable")

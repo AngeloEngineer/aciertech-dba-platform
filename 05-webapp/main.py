@@ -24,12 +24,11 @@ import httpx
 import orjson
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 
 from config import settings
 from db import close_pools, db_health_check, fetchall_ro, fetchone_ro, init_pools
-from routers import alerts, backups, cluster, quality
+from routers import alerts, backups, cluster, disaster, quality
+from tpl import templates
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -103,25 +102,33 @@ class ORJSONResponse(JSONResponse):
 
 app.default_response_class = ORJSONResponse
 
-# ── Templates ─────────────────────────────────────────────────────────────────
-templates = Jinja2Templates(directory="templates")
+# ── Templates (instance partagée définie dans tpl.py) ──────────────────────────
+# Les globals Grafana et helpers sont injectés dans tpl.py
 
-# Injecter les settings Grafana dans tous les templates
-templates.env.globals["grafana_base_url"]   = settings.grafana_base_url
-templates.env.globals["grafana_uid_cluster"] = settings.grafana_uid_cluster
-templates.env.globals["grafana_uid_perf"]    = settings.grafana_uid_perf
-templates.env.globals["grafana_uid_quality"] = settings.grafana_uid_quality
-templates.env.globals["grafana_uid_backups"] = settings.grafana_uid_backups
-templates.env.globals["app_version"]         = settings.app_version
+# ── Gestionnaires d'erreurs personnalisés ──────────────────────────────────────
 
-# Fonction Jinja2 pour construire les URLs iframe Grafana
-templates.env.globals["grafana_iframe_url"] = settings.grafana_iframe_url
+@app.exception_handler(404)
+async def not_found(request: Request, exc):
+    ctx = await _get_cluster_context(request)
+    return templates.TemplateResponse(
+        "dashboard.html", {"request": request, "erreur": "Page introuvable", **ctx},
+        status_code=404,
+    )
+
+@app.exception_handler(500)
+async def server_error(request: Request, exc):
+    ctx = await _get_cluster_context(request)
+    return templates.TemplateResponse(
+        "dashboard.html", {"request": request, "erreur": "Erreur interne du serveur", **ctx},
+        status_code=500,
+    )
 
 # ── Inclure les routers ───────────────────────────────────────────────────────
 app.include_router(cluster.router)
 app.include_router(quality.router)
 app.include_router(backups.router)
 app.include_router(alerts.router)
+app.include_router(disaster.router)
 
 
 # ── Helper : récupère le statut cluster via Patroni (pour le contexte global) ─

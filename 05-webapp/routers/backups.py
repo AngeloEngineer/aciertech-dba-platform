@@ -33,15 +33,14 @@ from typing import Literal
  
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
- 
+
 from config import settings
 from db import fetchall_ro, fetchone_ro
- 
+from tpl import templates
+
 logger = logging.getLogger("aciertech.backups")
 router = APIRouter(prefix="", tags=["backups"])
-templates = Jinja2Templates(directory="templates")
  
  
 # ── Modèles ───────────────────────────────────────────────────────────────────
@@ -94,7 +93,6 @@ async def backups_page(request: Request):
     Charge : historique, statut WAL, info pgbackrest, test restore.
     """
     history       = await _fetch_backup_history(days=8, limit=20)
-    wal_status    = await _fetch_wal_status()
     test_restore  = await _fetch_last_test_restore()
     pgb_info      = await _run_pgbackrest_info()
     pitr_range    = _compute_pitr_range(history)
@@ -102,7 +100,6 @@ async def backups_page(request: Request):
     ctx = {
         "request":      request,
         "history":      history,
-        "wal_status":   wal_status or {},
         "test_restore": test_restore or {},
         "pgb_info":     pgb_info,
         "pitr_range":   pitr_range,
@@ -152,7 +149,6 @@ async def _fetch_backup_history(days: int = 8, limit: int = 30) -> list[dict]:
         SELECT
             id,
             backup_type,
-            backup_tool,
             stanza,
             status,
             started_at,
@@ -162,15 +158,13 @@ async def _fetch_backup_history(days: int = 8, limit: int = 30) -> list[dict]:
             )::int                                              AS duration_s,
             size_bytes,
             backup_label,
-            pitr_target,
-            repo_path,
-            error_detail
+            notes
         FROM dba_schema.backup_history
         WHERE started_at >= NOW() - (%(d)s || ' days')::interval
         ORDER BY started_at DESC
         LIMIT %(l)s
         """,
-        ({"d": days, "l": limit},),
+        {"d": days, "l": limit},
     )
  
  
@@ -291,10 +285,9 @@ async def _fetch_last_test_restore() -> dict | None:
             ROUND(
                 EXTRACT(EPOCH FROM (completed_at - started_at))
             )::int                                              AS duration_s,
-            backup_label,
-            error_detail
+            backup_label
         FROM dba_schema.backup_history
-        WHERE backup_type = 'test_restore'
+        WHERE backup_type = 'restore_test'
         ORDER BY started_at DESC
         LIMIT 1
         """

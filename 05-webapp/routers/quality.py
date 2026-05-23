@@ -35,14 +35,13 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 
 from config import settings
 from db import fetchall_ro, fetchone_admin, fetchone_ro
+from tpl import templates
 
 logger = logging.getLogger("aciertech.quality")
 router = APIRouter(prefix="", tags=["quality"])
-templates = Jinja2Templates(directory="templates")
 
 
 # ── Route HTML ────────────────────────────────────────────────────────────────
@@ -89,24 +88,6 @@ async def quality_page(request: Request):
     # 5. Statut refresh v_ai_feature_set (via pg_cron)
     ai_refresh = await _fetch_ai_refresh_status()
 
-    # 6. Derniers snapshots qualité
-    snapshots = await fetchall_ro(
-        """
-        SELECT
-            snapshot_at,
-            sensor_type,
-            ROUND(valid_rate::numeric, 1)      AS valid_rate,
-            total_readings,
-            valid_count,
-            quarantined_count,
-            ROUND(avg_quality_score::numeric, 1) AS avg_quality_score
-        FROM dba_schema.data_quality_snapshots
-        WHERE snapshot_at >= NOW() - INTERVAL '1 hour'
-        ORDER BY snapshot_at DESC, sensor_type
-        LIMIT 50
-        """
-    )
-
     ctx = {
         "request":         request,
         "dashboard_rows":  dashboard_rows,
@@ -115,7 +96,6 @@ async def quality_page(request: Request):
         "silent_summary":  silent_summary or {},
         "anomalies":       anomalies,
         "ai_refresh":      ai_refresh,
-        "snapshots":       snapshots,
         "grafana_quality_url": settings.grafana_iframe_url(
             settings.grafana_uid_quality
         ),
@@ -242,21 +222,19 @@ async def _fetch_anomalies(
             sr.sensor_name,
             sr.sensor_type,
             al.anomaly_type,
-            al.quality_score,
-            al.anomaly_details,
-            al.detected_at,
-            rr.value        AS rejected_value,
+            al.occurred_at AS detected_at,
+            rr.raw_value    AS rejected_value,
             rr.unit         AS unit
         FROM iot_quarantine.anomaly_log al
         LEFT JOIN dba_schema.sensor_registry sr
                ON sr.sensor_id = al.sensor_id
         LEFT JOIN iot_quarantine.rejected_readings rr
-               ON rr.raw_reading_id = al.raw_reading_id
-        WHERE al.detected_at >= NOW() - (%(w)s || ' minutes')::interval
-        ORDER BY al.detected_at DESC
+               ON rr.original_id = al.original_id
+        WHERE al.occurred_at >= NOW() - (%(w)s || ' minutes')::interval
+        ORDER BY al.occurred_at DESC
         LIMIT %(l)s
         """,
-        ({"w": window_minutes, "l": limit},),
+        {"w": window_minutes, "l": limit},
     )
 
 
@@ -273,11 +251,11 @@ async def api_anomaly_stats(window_minutes: int = 60):
             COUNT(*)                    AS count,
             COUNT(DISTINCT sensor_id)   AS distinct_sensors
         FROM iot_quarantine.anomaly_log
-        WHERE detected_at >= NOW() - (%(w)s || ' minutes')::interval
+        WHERE occurred_at >= NOW() - (%(w)s || ' minutes')::interval
         GROUP BY anomaly_type
         ORDER BY count DESC
         """,
-        ({"w": window_minutes},),
+        {"w": window_minutes},
     )
     by_sensor_type = await fetchall_ro(
         """
@@ -288,11 +266,11 @@ async def api_anomaly_stats(window_minutes: int = 60):
         FROM iot_quarantine.anomaly_log al
         LEFT JOIN dba_schema.sensor_registry sr
                ON sr.sensor_id = al.sensor_id
-        WHERE al.detected_at >= NOW() - (%(w)s || ' minutes')::interval
+        WHERE al.occurred_at >= NOW() - (%(w)s || ' minutes')::interval
         GROUP BY sr.sensor_type, al.anomaly_type
         ORDER BY sr.sensor_type, count DESC
         """,
-        ({"w": window_minutes},),
+        {"w": window_minutes},
     )
     return {
         "by_anomaly_type": by_type,
@@ -319,13 +297,13 @@ async def api_sensors(sensor_type: str | None = None):
             sr.sensor_id,
             sr.sensor_name,
             sr.sensor_type,
-            sr.location,
+            sr.location_zone AS location,
             sr.is_active,
-            sr.installation_date,
-            st.min_value,
-            st.max_value,
-            st.warning_min,
-            st.warning_max,
+            sr.installed_at AS installation_date,
+            st.critical_min AS min_value,
+            st.critical_max AS max_value,
+            st.warn_min AS warning_min,
+            st.warn_max AS warning_max,
             st.zscore_threshold,
             st.expected_interval_s,
             st.unit
@@ -427,6 +405,48 @@ async def api_refresh_ai_view():
     }
 
 
+# ── AI Refresh Status ──────────────────────────────────────────────────────
+
+async def _fetch_ai_refresh_status() -> dict:
+    """
+    Retourne le statut du dernier refresh de iot_clean.v_ai_feature_set
+    depuis cron.job_run_details (job aciertech_refresh_ai_view).
+    Retourne un dict avec last_status, last_start, last_end, last_duration_s.
+    """
+    row = await fetchone_ro(
+        """
+        SELECT
+            d.status               AS last_status,
+            d.start_time            AS last_start,
+            d.end_time              AS last_end,
+            ROUND(
+                EXTRACT(EPOCH FROM (d.end_time - d.start_time))::numeric, 2
+            )                       AS last_duration_s,
+            d.return_message,
+            j.schedule,
+            j.active                AS job_active
+        FROM cron.job j
+        LEFT JOIN LATERAL (
+            SELECT *
+            FROM cron.job_run_details
+            WHERE jobid = j.jobid
+            ORDER BY start_time DESC
+            LIMIT 1
+        ) d ON TRUE
+        WHERE j.jobname = 'aciertech_refresh_ai_view'
+        """
+    )
+    return row or {
+        "last_status": None,
+        "last_start": None,
+        "last_end": None,
+        "last_duration_s": None,
+        "return_message": None,
+        "schedule": "*/5 * * * *",
+        "job_active": True,
+    }
+
+
 @router.get("/api/quality/ingestion-errors", tags=["quality"])
 async def api_ingestion_errors(limit: int = 30):
     """
@@ -439,15 +459,14 @@ async def api_ingestion_errors(limit: int = 30):
         SELECT
             sensor_id,
             sensor_type,
-            raw_value,
-            error_code,
+            raw_payload AS raw_value,
+            error_type  AS error_code,
             error_message,
-            LEFT(error_context::text, 200) AS error_context,
             occurred_at
         FROM iot_raw.ingestion_errors
         WHERE occurred_at >= NOW() - INTERVAL '24 hours'
         ORDER BY occurred_at DESC
         LIMIT %(l)s
         """,
-        ({"l": limit},),
+        {"l": limit},
     )

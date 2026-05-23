@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}Tableau de bord — AcierTech{% endblock %}
+{% block page_title %}Tableau de bord{% endblock %}
+{% block page_subtitle %}Aperçu du cluster · {{ total_sensors | default('47') }} capteurs · Surveillance temps réel{% endblock %}
+
+{% block content %}
+<!-- KPI Strip -->
+<div class="kpi-grid kpi-grid-6 mb-6">
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--accent)"></div>
+    <div class="kpi-label">État du cluster</div>
+    <div class="kpi-value" style="color:{% if cluster_status_class == 'ok' %}var(--success){% elif cluster_status_class == 'warning' %}var(--warning){% else %}var(--danger){% endif %}">
+      {{ cluster_status_text | default('—') }}
+    </div>
+    <div class="kpi-meta">3 nœuds · HA</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--success)"></div>
+    <div class="kpi-label">Qualité des données</div>
+    <div class="kpi-value">{{ valid_rate | default('—') }}<span class="kpi-unit">%</span></div>
+    <div class="kpi-meta">47 capteurs · 1h</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--warning)"></div>
+    <div class="kpi-label">Dernière FULL</div>
+    <div class="kpi-value">{{ full_backup_age | default('—') }}</div>
+    <div class="kpi-meta">pgBackRest · Stanza : aciertech</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--violet)"></div>
+    <div class="kpi-label">Lag réplication</div>
+    <div class="kpi-value">{{ repl_lag | default('—') }}<span class="kpi-unit">s</span></div>
+    <div class="kpi-meta">{{ replication_lag_ms | default('—') }} ms · Streaming WAL</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--accent)"></div>
+    <div class="kpi-label">Connexions actives</div>
+    <div class="kpi-value">{{ connections | default('—') }}</div>
+    <div class="kpi-meta">Via HAProxy :5001</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--danger)"></div>
+    <div class="kpi-label">Capteurs silencieux</div>
+    <div class="kpi-value" style="color:{% if silent_sensors | int > 0 %}var(--danger){% else %}var(--success){% endif %}">{{ silent_sensors | default('0') }}</div>
+    <div class="kpi-meta">&gt;3× intervalle attendu</div>
+  </div>
+</div>
+
+<!-- Topology + Activity -->
+<div class="grid-65-35 mb-6">
+  <div>
+    <div class="card mb-4">
+      <div class="card-header">
+        <h3>
+          <span class="card-icon"><svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></svg></span>
+          Topologie des serveurs
+        </h3>
+        <span class="badge badge-ok badge-mono">{{ _patroni_data.get('members',[]) | length if _patroni_data is defined and _patroni_data.get('members') else '3' }} nœuds</span>
+      </div>
+      <div class="card-body">
+        {% set _members = _patroni_data.get('members',[]) if _patroni_data is defined and _patroni_data.get('members') else [] %}
+        {% if _members and _members|length > 0 %}
+        <div style="display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:center;gap:8px">
+          {% for m in _members %}
+          {% set is_leader = m.get('role') == 'leader' %}
+          <div class="node-card {% if is_leader %}leader{% else %}replica{% endif %}">
+            <div class="node-head">
+              <div class="node-name">{{ m.get('name','—') }}</div>
+              <span class="node-role {% if is_leader %}leader{% else %}replica{% endif %}">
+                {% if is_leader %}PRIMARY{% else %}REPLICA{% endif %}
+              </span>
+            </div>
+            <div class="node-meta">
+              <div class="meta-item"><span class="m-label">Hôte</span><span class="m-value" style="font-size:10.5px">{{ m.get('host','—') }}</span></div>
+              <div class="meta-item"><span class="m-label">État</span><span class="badge {% if m.get('state') == 'running' %}badge-ok{% else %}badge-err{% endif %} badge-sm">{{ m.get('state','—') }}</span></div>
+              <div class="meta-item"><span class="m-label">API</span><span class="m-value">:8008</span></div>
+              <div class="meta-item"><span class="m-label">Chrono.</span><span class="m-value">{{ m.get('timeline',1) }}</span></div>
+            </div>
+          </div>
+          {% if not loop.last %}
+          <div class="repl-arrow">
+            <svg viewBox="0 0 48 16">
+              <path d="M2 8h36M34 3l10 5-10 5" stroke="var(--text-tertiary)" stroke-width="1.5" fill="none" stroke-dasharray="4 3">
+                <animate attributeName="stroke-dashoffset" from="0" to="14" dur="1.2s" repeatCount="indefinite"/>
+              </path>
+            </svg>
+            <span class="repl-value" style="color:{% set l = replication_lag_ms | float %}{% if l > 30 %}var(--danger){% elif l > 5 %}var(--warning){% else %}var(--success){% endif %}">
+              {{ replication_lag_ms | default('0') }}ms
+            </span>
+          </div>
+          {% endif %}
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+          <div class="empty-title">Topologie indisponible</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h3>
+          <span class="card-icon"><svg viewBox="0 0 24 24"><path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-5.5 4 2-7L3 9h7z"/></svg></span>
+          Qualité des capteurs (7 types)
+        </h3>
+        <span class="badge badge-info badge-mono">{{ total_sensors | default('47') }} capteurs</span>
+      </div>
+      <div class="card-body">
+        {% if sensor_rows is defined and sensor_rows|length > 0 %}
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px">
+          {% for s in sensor_rows %}
+          {% set rate = s.get('valid_rate_pct',0) | float %}
+          {% set pct_class = 'green' if rate >= 85 else ('yellow' if rate >= 70 else 'red') %}
+          <div class="kpi-card" style="padding:14px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+              <span style="font-size:16px">{% set st = s.sensor_type | lower %}
+                {% if 'temp' in st %}🌡️{% elif 'press' in st %}🔧{% elif 'vibra' in st %}⚡{% elif 'cour' in st %}💡{% elif 'débit' in st or 'debit' in st %}🌊{% elif 'vit' in st %}🔄{% elif 'épais' in st or 'epais' in st %}📏{% else %}📡{% endif %}
+              </span>
+              <div>
+                <div style="font-weight:600;font-size:13px">{{ s.sensor_type }}</div>
+                <div style="font-size:10.5px;color:var(--text-tertiary)">{{ s.sensors_active|default(0) }} actifs · {{ s.sensors_silent|default(0) }} silencieux</div>
+              </div>
+            </div>
+            <div class="progress mb-3">
+              <div class="bar {{ pct_class }}" style="width:{{ rate }}%"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span class="text-mono" style="font-weight:600;font-size:15px">{{ '%.1f'|format(rate) }}%</span>
+              <span class="badge {% if rate >= 85 %}badge-ok{% elif rate >= 70 %}badge-warn{% else %}badge-err{% endif %} badge-sm">{{ s.quality_level | default('—') }}</span>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state"><div class="empty-title">Données qualité indisponibles</div></div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card mb-4">
+      <div class="card-header">
+        <h3>
+          <span class="card-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
+          Activité récente
+        </h3>
+        <span class="refresh-indicator">En direct</span>
+      </div>
+      <div class="card-body">
+        {% if recent_activity is defined and recent_activity|length > 0 %}
+        <ul class="feed">
+          {% for act in recent_activity %}
+          <li class="feed-item">
+            <span class="status-dot {% if act.status == 'success' or act.status == 'running' %}ok{% elif act.status == 'failed' %}err{% else %}muted{% endif %}"></span>
+            <div class="feed-content">
+              <div class="feed-title">{{ act.label | default('—') }}</div>
+              {% if act.detail %}<div class="feed-desc">{{ act.detail | truncate(60) }}</div>{% endif %}
+            </div>
+            <span class="feed-time">{{ act.event_at | default('') }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <div class="empty-state"><div class="empty-title">Aucune activité récente</div></div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h3>
+          <span class="card-icon"><svg viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span>
+          Stack technique
+        </h3>
+        <span class="badge badge-ghost badge-mono">v{{ app_version | default('1.0.0') }}</span>
+      </div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          {% set stack = [
+            ('PostgreSQL', '16', 'Base de données'),
+            ('Patroni', '3 nœuds', 'Gestion HA'),
+            ('pgBackRest', 'PITR', 'Sauvegarde & restauration'),
+            ('HAProxy', '5000/5001', 'Équilibrage de charge'),
+            ('etcd', '3 membres', 'Stockage config'),
+            ('Prometheus', '15s', 'Métriques & alertes'),
+            ('Grafana', 'Intégré', 'Tableaux de bord'),
+            ('pg_cron', '8 jobs', 'Planification')
+          ] %}
+          {% for name, ver, desc in stack %}
+          <div style="padding:10px;border-radius:var(--radius-md);background:var(--bg-input);display:flex;align-items:center;gap:10px">
+            <span class="status-dot info"></span>
+            <div>
+              <div style="font-size:13px;font-weight:600">{{ name }}</div>
+              <div style="font-size:10.5px;color:var(--text-tertiary)">{{ ver }} · {{ desc }}</div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

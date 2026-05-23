@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+{% block title %}Qualité — AcierTech{% endblock %}
+{% block page_title %}Qualité des capteurs{% endblock %}
+{% block page_subtitle %}47 capteurs · Validation temps réel · Score qualité IA{% endblock %}
+
+{% block topbar_actions %}
+{{ super() }}
+<button class="btn btn-secondary btn-sm" onclick="refreshAIView()" id="btnRefreshAI">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg>
+  Rafraîchir vue IA
+</button>
+{% endblock %}
+
+{% block content %}
+<!-- KPI strip -->
+<div class="kpi-grid kpi-grid-6 mb-6">
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--success)"></div>
+    <div class="kpi-label">Taux global</div>
+    <div class="kpi-value">{{ summary.get('avg_valid_rate','—') | default('—') }}<span class="kpi-unit">%</span></div>
+    <div class="kpi-meta">Moyenne sur 7 types de capteurs</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--violet)"></div>
+    <div class="kpi-label">Score moyen</div>
+    <div class="kpi-value">{{ summary.get('avg_score','—') | default('—') }}</div>
+    <div class="kpi-meta">fn_compute_quality_score</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--warning)"></div>
+    <div class="kpi-label">Mis en quarantaine (1h)</div>
+    <div class="kpi-value">{{ summary.get('total_quarantined_1h',0) | default(0) }}</div>
+    <div class="kpi-meta">Dernière heure</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--danger)"></div>
+    <div class="kpi-label">Capteurs silencieux</div>
+    <div class="kpi-value" style="color:{% if summary.get('total_sensors_silent',0) | int > 0 %}var(--danger){% else %}var(--success){% endif %}">{{ summary.get('total_sensors_silent',0) | default(0) }}</div>
+    <div class="kpi-meta">v_silent_sensors</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--accent)"></div>
+    <div class="kpi-label">Lectures totales</div>
+    <div class="kpi-value">{{ summary.get('total_readings_1h',0) | default(0) }}</div>
+    <div class="kpi-meta">Dernière heure</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--orange)"></div>
+    <div class="kpi-label">Dernier rafraîch. IA</div>
+    <div class="kpi-value" style="font-size:20px">{{ ai_refresh.get('last_duration_s','—') | default('—') }}<span class="kpi-unit">s</span></div>
+    <div class="kpi-meta">
+      <span class="badge {% if ai_refresh.get('last_status') == 'success' %}badge-ok{% else %}badge-warn{% endif %} badge-sm">{{ ai_refresh.get('last_status','—') | default('—') }}</span>
+    </div>
+  </div>
+</div>
+
+<!-- Scoring legend -->
+<div class="card mb-6">
+  <div class="card-header">
+    <h3>
+      <span class="card-icon"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>
+      Légende des scores — fn_compute_quality_score
+    </h3>
+  </div>
+  <div class="card-body">
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <span class="badge badge-ok badge-lg" style="padding:5px 16px;font-size:12px;font-family:var(--font-mono)">100 VALID</span>
+      <span class="badge badge-info badge-lg" style="padding:5px 16px;font-size:12px;font-family:var(--font-mono)">75 WARNING_LOW/HIGH</span>
+      <span class="badge badge-warn badge-lg" style="padding:5px 16px;font-size:12px;font-family:var(--font-mono)">65 ZSCORE_ANOMALY</span>
+      <span class="badge badge-ghost badge-lg" style="padding:5px 16px;font-size:12px;font-family:var(--font-mono)">50 NO_THRESHOLD</span>
+      <span class="badge badge-err badge-lg" style="padding:5px 16px;font-size:12px;font-family:var(--font-mono)">0 OUT_OF_RANGE</span>
+    </div>
+  </div>
+</div>
+
+<!-- By sensor type -->
+<div class="card mb-6">
+  <div class="card-header">
+    <h3>
+      <span class="card-icon"><svg viewBox="0 0 24 24"><path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-5.5 4 2-7L3 9h7z"/></svg></span>
+      Qualité par type de capteur
+    </h3>
+    <span class="badge badge-info badge-mono">{{ dashboard_rows | length if dashboard_rows is defined else '—' }} types</span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Capteurs</th>
+          <th>Taux valide</th>
+          <th>Lectures</th>
+          <th>Valides</th>
+          <th>Quarantaine</th>
+          <th>Score moy.</th>
+          <th>Niveau</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if dashboard_rows is defined and dashboard_rows|length > 0 %}
+          {% for d in dashboard_rows %}
+          {% set rate = d.get('valid_rate_pct',0) | float %}
+          <tr>
+            <td style="font-weight:600">
+              <span style="margin-right:4px">{% set st = d.get('sensor_type','') | lower %}
+                {% if 'temp' in st %}🌡️{% elif 'press' in st %}🔧{% elif 'vibra' in st %}⚡{% elif 'cour' in st %}💡{% elif 'débit' in st or 'debit' in st %}🌊{% elif 'vit' in st %}🔄{% elif 'épais' in st or 'epais' in st %}📏{% else %}📡{% endif %}
+              </span>
+              {{ d.get('sensor_type','—') }}
+            </td>
+            <td>
+              <span class="text-mono">{{ d.get('sensors_active',0) }}</span>
+              {% if d.get('sensors_silent',0) > 0 %}
+              <span class="badge badge-err badge-sm" style="margin-left:4px;font-size:9px">-{{ d.sensors_silent }}</span>
+              {% endif %}
+            </td>
+            <td style="min-width:160px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <div class="progress" style="width:80px;height:5px">
+                  <div class="bar {{ 'green' if rate >= 85 else ('yellow' if rate >= 70 else 'red') }}" style="width:{{ rate }}%"></div>
+                </div>
+                <span class="text-mono" style="font-weight:600;font-size:12.5px">{{ '%.1f'|format(rate) }}%</span>
+              </div>
+            </td>
+            <td class="text-mono">{{ d.get('total_readings',0) }}</td>
+            <td class="text-mono">{{ d.get('valid_count',0) }}</td>
+            <td class="text-mono" style="color:{% if d.get('quarantined_count',0) > 0 %}var(--warning){% else %}var(--text-tertiary){% endif %}">{{ d.get('quarantined_count',0) }}</td>
+            <td class="text-mono" style="font-weight:600">{{ d.get('avg_quality_score','—') }}</td>
+            <td>
+              {% set ql = d.get('quality_level','—') %}
+              <span class="badge {% if ql == 'EXCELLENT' %}badge-ok{% elif ql == 'GOOD' %}badge-info{% elif ql == 'DEGRADED' %}badge-warn{% elif ql in ('CRITICAL','NO_DATA') %}badge-err{% else %}badge-ghost{% endif %}">{{ ql }}</span>
+            </td>
+          </tr>
+          {% endfor %}
+        {% else %}
+        <tr><td colspan="8" style="text-align:center;padding:32px;color:var(--text-tertiary)">Aucune donnée qualité disponible</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Anomalies + Silent sensors -->
+<div class="grid-2 mb-6">
+  <div class="card">
+    <div class="card-header">
+      <h3>
+        <span class="card-icon"><svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01"/></svg></span>
+        Anomalies récentes
+      </h3>
+      <span class="badge {% if anomalies is defined and anomalies|length > 0 %}badge-err{% else %}badge-ok{% endif %} badge-lg">
+        {{ anomalies | length if anomalies is defined else '0' }}
+      </span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Capteur</th><th>Code anomalie</th><th>Score</th><th>Valeur</th><th>Détecté</th></tr>
+        </thead>
+        <tbody>
+          {% if anomalies is defined and anomalies|length > 0 %}
+            {% for a in anomalies %}
+            {% set atype = a.get('anomaly_type','') %}
+            <tr>
+              <td>
+                <div style="font-weight:600;font-size:12px">{{ a.get('sensor_name','—') }}</div>
+                <div style="font-size:10px;color:var(--text-tertiary);font-family:var(--font-mono)">{{ a.get('sensor_type','') }}</div>
+              </td>
+              <td>
+                <span class="badge {% if atype == 'OUT_OF_RANGE' %}badge-err{% elif atype in ('WARNING_LOW','WARNING_HIGH') %}badge-warn{% elif atype == 'ZSCORE_ANOMALY' %}badge-info{% else %}badge-ghost{% endif %} badge-mono badge-sm">
+                  {{ atype }}
+                </span>
+              </td>
+              <td class="text-mono">{{ a.get('quality_score','—') }}</td>
+              <td class="text-mono">{{ a.get('rejected_value','—') }} {{ a.get('unit','') }}</td>
+              <td style="font-size:11px;color:var(--text-tertiary);font-family:var(--font-mono);white-space:nowrap">{{ a.get('detected_at','—') }}</td>
+            </tr>
+            {% endfor %}
+          {% else %}
+          <tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-tertiary)">Aucune anomalie dans la dernière heure</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h3>
+        <span class="card-icon"><svg viewBox="0 0 24 24"><path d="M11 5L6 9H2v6h4l5 4V5zM19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></svg></span>
+        Capteurs silencieux
+      </h3>
+    </div>
+    <div class="card-body">
+      <div class="kpi-grid kpi-grid-3 mb-5">
+        <div style="text-align:center;padding:14px;background:var(--danger-bg);border-radius:var(--radius-md);border:1px solid rgba(242,139,130,.15)">
+          <div class="text-mono" style="font-size:28px;font-weight:700;color:var(--danger)">{{ silent_summary.get('critical_count',0) | default(0) }}</div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--danger);margin-top:2px">CRITIQUE</div>
+        </div>
+        <div style="text-align:center;padding:14px;background:var(--warning-bg);border-radius:var(--radius-md);border:1px solid rgba(253,214,99,.15)">
+          <div class="text-mono" style="font-size:28px;font-weight:700;color:var(--warning)">{{ silent_summary.get('warning_count',0) | default(0) }}</div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--warning);margin-top:2px">ATTENTION</div>
+        </div>
+        <div style="text-align:center;padding:14px;background:var(--info-bg);border-radius:var(--radius-md);border:1px solid rgba(138,180,248,.15)">
+          <div class="text-mono" style="font-size:28px;font-weight:700;color:var(--accent)">{{ silent_summary.get('never_seen_count',0) | default(0) }}</div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--accent);margin-top:2px">JAMAIS VU</div>
+        </div>
+      </div>
+      {% if silent_sensors is defined and silent_sensors|length > 0 %}
+        {% for s in silent_sensors %}
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 0;{% if not loop.last %}border-bottom:1px solid var(--border-light){% endif %}">
+          <span class="status-dot {% if s.get('silence_level') == 'CRITICAL' %}err{% elif s.get('silence_level') == 'WARNING' %}warn{% else %}info{% endif %} pulse"></span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600;font-family:var(--font-mono)">{{ s.get('sensor_name','—') }}</div>
+            <div style="font-size:11px;color:var(--text-tertiary)">{{ s.get('sensor_type','—') }} · {{ s.get('location','') }}</div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div class="text-mono" style="font-size:13px;font-weight:600">{% set sd = s.get('silence_duration_s',0) | int %}{% if sd > 3600 %}{{ '%.1f'|format(sd / 3600) }}h{% elif sd > 60 %}{{ (sd / 60) | int }}min{% else %}{{ sd }}s{% endif %}</div>
+            <div style="font-size:10px;color:var(--text-tertiary)">silencieux</div>
+          </div>
+        </div>
+        {% endfor %}
+      {% else %}
+      <div class="empty-state">
+        <div class="empty-title">Tous les capteurs émettent</div>
+        <p style="font-size:12px;color:var(--text-tertiary);margin-top:2px">Aucun capteur silencieux détecté</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Grafana -->
+<div class="iframe-wrap">
+  <div class="iframe-header">
+    <h3>Grafana — Qualité des données</h3>
+    <span class="refresh-indicator" style="margin-left:auto">Rafraîchissement 30s</span>
+  </div>
+  <iframe src="{{ grafana_quality_url }}" height="500" frameborder="0" loading="lazy" title="Grafana Qualité des données"></iframe>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+async function refreshAIView(){
+  const btn=document.getElementById('btnRefreshAI');
+  const orig=btn.innerHTML;
+  btn.disabled=true;
+  btn.innerHTML='<span class="spin" style="display:inline-block;width:14px;height:14px"></span> Rafraîchissement...';
+  try{
+    const r=await fetch('/api/quality/refresh-ai-view',{method:'POST'});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    if(d.success&&d.duration_s){
+      showToast('REFRESH CONCURRENTLY terminé en '+d.duration_s+'s'+(d.warning?' ⚠ >30s':''), d.warning?'warning':'success');
+    }else{
+      showToast(d.message||'Réponse inattendue','info');
+    }
+  }catch(e){
+    showToast('Erreur : '+e.message,'error');
+  }finally{
+    btn.disabled=false;
+    btn.innerHTML=orig;
+  }
+}
+</script>
+{% endblock %}

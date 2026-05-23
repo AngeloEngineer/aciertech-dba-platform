@@ -1,0 +1,918 @@
+{
+  "description": "Qualit\u00e9 donn\u00e9es IoT 47 capteurs \u2014 v_data_quality_dashboard, v_silent_sensors, anomaly_log \u2014 AcierTech",
+  "editable": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "title": "Synth\u00e8se Qualit\u00e9 Globale (47 capteurs \u2014 fen\u00eatre 1h)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "green",
+                "value": 85
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "id": 1,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "showThresholdLabels": true,
+        "showThresholdMarkers": true
+      },
+      "title": "Taux global de validation (toutes types)",
+      "targets": [
+        {
+          "expr": "avg(aciertech_valid_rate_pct{job=~\"postgres_exporter_node.*\"})",
+          "legendFormat": "Valid rate %",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "Capteurs silencieux CRITIQUES (> 6\u00d7intervalle)",
+      "targets": [
+        {
+          "expr": "aciertech_critical_silent_sensors_count{job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "Critiques",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "orange",
+                "value": 3
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "Capteurs silencieux WARNING (> 3\u00d7intervalle)",
+      "targets": [
+        {
+          "expr": "aciertech_warning_silent_sensors_count{job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "Warning",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 100
+              },
+              {
+                "color": "red",
+                "value": 500
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "Lectures en quarantaine (derni\u00e8re heure)",
+      "targets": [
+        {
+          "expr": "sum(aciertech_quarantined_count_1h{job=~\"postgres_exporter_node.*\"})",
+          "legendFormat": "Quarantin\u00e9es",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 30
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
+      "id": 5,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "Dur\u00e9e derni\u00e8re refresh v_ai_feature_set (s)",
+      "targets": [
+        {
+          "expr": "aciertech_ai_view_refresh_duration_seconds{job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "Dur\u00e9e refresh AI (s)",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "id": 6,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "Total lectures iot_raw (derni\u00e8re heure)",
+      "targets": [
+        {
+          "expr": "sum(aciertech_total_readings_1h{job=~\"postgres_exporter_node.*\"})",
+          "legendFormat": "Total lectures 1h",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "id": 101,
+      "title": "Taux de validation par type de capteur \u2014 v_data_quality_dashboard",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "green",
+                "value": 85
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 7
+      },
+      "id": 10,
+      "options": {
+        "displayMode": "gradient",
+        "minVizHeight": 10,
+        "minVizWidth": 0,
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "showUnfilled": true,
+        "valueMode": "color"
+      },
+      "title": "Taux validation % par sensor_type (1h) \u2014 CRIT<70 / WARN<85 / OK\u226585",
+      "targets": [
+        {
+          "expr": "aciertech_valid_rate_pct{job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "{{ sensor_type }}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "green",
+                "value": 65
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 7
+      },
+      "id": 11,
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "showUnfilled": true
+      },
+      "title": "Score qualit\u00e9 moyen par sensor_type \u2014 fn_compute_quality_score",
+      "description": "Scores : NO_THRESHOLD=50, OUT_OF_RANGE=0, WARNING=75, ZSCORE_ANOMALY=65, VALID=100",
+      "targets": [
+        {
+          "expr": "aciertech_avg_quality_score{job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "{{ sensor_type }}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "type": "bargauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "id": 102,
+      "title": "\u00c9volution temporelle \u2014 Lectures & Quarantaine",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "lineInterpolation": "smooth"
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 20,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "title": "Lectures valides vs quarantin\u00e9es par sensor_type (taux 5min)",
+      "targets": [
+        {
+          "expr": "rate(aciertech_valid_readings_total{job=~\"postgres_exporter_node.*\"}[5m])",
+          "legendFormat": "Valides/s \u2014 {{ sensor_type }}",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(aciertech_quarantined_readings_total{job=~\"postgres_exporter_node.*\"}[5m])",
+          "legendFormat": "Quarantin\u00e9es/s \u2014 {{ sensor_type }}",
+          "refId": "B"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "lineInterpolation": "smooth"
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "id": 21,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "title": "Anomalies d\u00e9tect\u00e9es par type (anomaly_log \u2014 fn_compute_quality_score codes)",
+      "description": "Codes : OUT_OF_RANGE, WARNING_LOW, WARNING_HIGH, ZSCORE_ANOMALY (via trg_validate_sensor FOREACH)",
+      "targets": [
+        {
+          "expr": "rate(aciertech_anomaly_log_total{job=~\"postgres_exporter_node.*\"}[5m])",
+          "legendFormat": "Anomalies/s \u2014 {{ anomaly_type }}",
+          "refId": "A"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "id": 103,
+      "title": "Capteurs Silencieux \u2014 v_silent_sensors",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      },
+      "id": 30,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "title": "Capteurs silencieux (cumulatif) \u2014 CRITICAL / WARNING / NEVER_SEEN",
+      "targets": [
+        {
+          "expr": "aciertech_critical_silent_sensors_count{job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "CRITICAL (> 6\u00d7intervalle)",
+          "refId": "A"
+        },
+        {
+          "expr": "aciertech_warning_silent_sensors_count{job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "WARNING (> 3\u00d7intervalle)",
+          "refId": "B"
+        },
+        {
+          "expr": "aciertech_never_seen_sensors_count{job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "NEVER_SEEN (jamais \u00e9mis)",
+          "refId": "C"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "align": "auto",
+            "displayMode": "color-background",
+            "inspect": false,
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "silence_level"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "CRITICAL": {
+                        "color": "red",
+                        "index": 0
+                      },
+                      "WARNING": {
+                        "color": "yellow",
+                        "index": 1
+                      },
+                      "NEVER_SEEN": {
+                        "color": "blue",
+                        "index": 2
+                      }
+                    },
+                    "type": "value"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "id": 31,
+      "options": {
+        "footer": {
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "silence_duration"
+          }
+        ]
+      },
+      "title": "D\u00e9tail capteurs silencieux (depuis v_silent_sensors via queries.yaml)",
+      "targets": [
+        {
+          "expr": "aciertech_silent_sensor_duration_seconds{job=~\"postgres_exporter_node.*\"}",
+          "format": "table",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "sensor_name": "Capteur",
+              "sensor_type": "Type",
+              "silence_level": "Niveau silence",
+              "Value": "Dur\u00e9e silence (s)",
+              "location": "Localisation"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "id": 104,
+      "title": "Vue Mat\u00e9rialis\u00e9e IA \u2014 v_ai_feature_set",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "id": 40,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table"
+        }
+      },
+      "title": "Dur\u00e9e REFRESH CONCURRENTLY v_ai_feature_set \u2014 Seuil WARNING 30s",
+      "description": "fn_refresh_ai_view : RAISE WARNING si > 30s. autocommit obligatoire (pg_cron natif).",
+      "targets": [
+        {
+          "expr": "aciertech_ai_view_refresh_duration_seconds{job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "Dur\u00e9e refresh (s)",
+          "refId": "A"
+        },
+        {
+          "expr": "scalar(30)",
+          "legendFormat": "Seuil WARNING (30s)",
+          "refId": "B"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-aciertech"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 300
+              },
+              {
+                "color": "red",
+                "value": 600
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      },
+      "id": 41,
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "Derni\u00e8re refresh de v_ai_feature_set il y a",
+      "targets": [
+        {
+          "expr": "time() - aciertech_ai_view_last_refresh_timestamp{job=~\"postgres_exporter_node.*\"}",
+          "legendFormat": "D\u00e9lai depuis refresh (s)",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "type": "stat"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": [
+    "aciertech",
+    "iot",
+    "data-quality",
+    "capteurs",
+    "quarantaine"
+  ],
+  "templating": {
+    "list": [
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus-aciertech"
+        },
+        "definition": "label_values(aciertech_valid_rate_pct, sensor_type)",
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "name": "sensor_type",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query",
+        "label": "Type capteur"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "utc",
+  "title": "AcierTech \u2014 Qualit\u00e9 Donn\u00e9es IoT",
+  "uid": "aciertech-data-quality",
+  "version": 1
+}

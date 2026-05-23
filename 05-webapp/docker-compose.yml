@@ -1,0 +1,88 @@
+services:
+
+  # ── PostgreSQL 16 avec données mock ──────────────────────────────────
+  postgres:
+    image: postgres:16
+    container_name: aciertech-pg
+    environment:
+      POSTGRES_DB: aciertech_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      # SQL migrations (copied into container for init script)
+      - ./docker/scripts/init-db.sh:/docker-entrypoint-initdb.d/00_init.sh:ro
+      - ./docker/sql/migrations:/docker-entrypoint-initdb.d/02-sql/migrations:ro
+      - ./docker/sql/views:/docker-entrypoint-initdb.d/02-sql/views:ro
+      - ./docker/sql/functions:/docker-entrypoint-initdb.d/02-sql/functions:ro
+      - ./docker/sql/triggers:/docker-entrypoint-initdb.d/02-sql/triggers:ro
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d aciertech_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - aciertech-demo
+
+  # ── Mock server (Patroni :8008 + Prometheus :9090 + etcd :2379 + HAProxy :7000) ──
+  mock-server:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.mock
+    container_name: aciertech-mock
+    ports:
+      - "8008:8008"
+      - "9090:9090"
+      - "2379:2379"
+      - "7000:7000"
+    networks:
+      - aciertech-demo
+
+  # ── Grafana avec dashboards pré-installés ────────────────────────────
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: aciertech-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SERVER_ROOT_URL: http://localhost:3000
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_NAME: Main Org.
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+    volumes:
+      - ./docker/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./docker/grafana/dashboards/dashboard.yml:/etc/grafana/provisioning/dashboards/dashboard.yml:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - mock-server
+    networks:
+      - aciertech-demo
+
+  # ── Webapp DBA Console ───────────────────────────────────────────────
+  webapp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.webapp
+    container_name: aciertech-webapp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock-server:
+        condition: service_started
+      grafana:
+        condition: service_started
+    env_file:
+      - ./docker/.env
+    ports:
+      - "8080:8080"
+    networks:
+      - aciertech-demo
+
+networks:
+  aciertech-demo:
+    name: aciertech-demo
+    driver: bridge

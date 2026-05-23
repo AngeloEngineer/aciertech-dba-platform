@@ -1,0 +1,10 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus-AcierTech
+    type: prometheus
+    uid: prometheus-aciertech
+    url: http://mock-server:9090
+    access: proxy
+    isDefault: true
+    editable: false

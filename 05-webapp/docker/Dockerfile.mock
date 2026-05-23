@@ -1,0 +1,8 @@
+FROM python:3.12-alpine
+
+COPY mock-server.py /mock-server.py
+COPY run-mock.py /run-mock.py
+
+EXPOSE 8008 9090 2379 7000
+
+CMD ["python3", "/run-mock.py"]

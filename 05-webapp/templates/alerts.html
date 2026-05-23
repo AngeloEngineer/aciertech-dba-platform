@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+{% block title %}Alertes — AcierTech{% endblock %}
+{% block page_title %}Alertes{% endblock %}
+{% block page_subtitle %}Surveillance temps réel · Règles Prometheus · Métriques Pushgateway{% endblock %}
+
+{% block content %}
+<!-- Prometheus banner -->
+{% if not prom_ok %}
+<div class="banner error">
+  <svg class="banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+  <span><strong>Prometheus indisponible</strong> — Les alertes ne peuvent pas être chargées. Vérifiez le service Prometheus.</span>
+</div>
+{% elif severity_counts and severity_counts.get('critical',0) > 0 %}
+<div class="banner error">
+  <svg class="banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01"/></svg>
+  <span><strong>{{ severity_counts.get('critical',0) }} alerte(s) critique(s)</strong> — Action immédiate requise.</span>
+</div>
+{% elif prom_ok %}
+<div class="banner success">
+  <svg class="banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+  <span><strong>Système nominal</strong> — Aucune alerte critique. Tous les services opérationnels.</span>
+</div>
+{% endif %}
+
+<!-- Severity counters -->
+<div class="kpi-grid kpi-grid-4 mb-6">
+  <div class="kpi-card" style="border-left:3px solid var(--danger)">
+    <div class="kpi-label">Critique</div>
+    <div class="kpi-value" style="color:var(--danger);font-size:32px"><span class="count-up" data-count="{{ severity_counts.get('critical',0) | default(0) }}">{{ severity_counts.get('critical',0) | default(0) }}</span></div>
+  </div>
+  <div class="kpi-card" style="border-left:3px solid var(--warning)">
+    <div class="kpi-label">Avertissement</div>
+    <div class="kpi-value" style="color:var(--warning);font-size:32px"><span class="count-up" data-count="{{ severity_counts.get('warning',0) | default(0) }}">{{ severity_counts.get('warning',0) | default(0) }}</span></div>
+  </div>
+  <div class="kpi-card" style="border-left:3px solid var(--violet)">
+    <div class="kpi-label">En attente</div>
+    <div class="kpi-value" style="color:var(--violet);font-size:32px"><span class="count-up" data-count="{{ pending_count | default(0) }}">{{ pending_count | default(0) }}</span></div>
+  </div>
+  <div class="kpi-card" style="border-left:3px solid var(--accent)">
+    <div class="kpi-label">Info</div>
+    <div class="kpi-value" style="color:var(--accent);font-size:32px"><span class="count-up" data-count="{{ severity_counts.get('info',0) | default(0) }}">{{ severity_counts.get('info',0) | default(0) }}</span></div>
+  </div>
+</div>
+
+<!-- Active alerts table -->
+<div class="card mb-6">
+  <div class="card-header">
+    <h3>
+      <span class="card-icon"><svg viewBox="0 0 24 24"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span>
+      Alertes actives
+    </h3>
+    <span class="badge {% if firing_count > 0 %}badge-err{% else %}badge-ok{% endif %} badge-lg" id="firingBadge">
+      {{ firing_count | default(0) }} en cours
+    </span>
+  </div>
+  <div class="table-wrap" id="alertsTableBody">
+    {% if firing is defined and firing|length > 0 %}
+    <table>
+      <thead>
+        <tr>
+          <th>Sévérité</th>
+          <th>Alerte</th>
+          <th>Catégorie</th>
+          <th>Labels</th>
+          <th>Description</th>
+          <th>Depuis</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in firing %}
+        {% set sev = a.get('labels',{}).get('severity','info') | lower %}
+        <tr>
+          <td>
+            <span class="badge {% if sev == 'critical' %}badge-err{% elif sev == 'warning' %}badge-warn{% elif sev == 'info' %}badge-info{% else %}badge-ghost{% endif %} badge-mono badge-sm">{{ sev | upper }}</span>
+          </td>
+          <td style="font-weight:600;font-family:var(--font-mono);font-size:12px">{{ a.get('labels',{}).get('alertname','—') }}</td>
+          <td style="font-size:12px;color:var(--text-secondary)">{{ rule_categories.get(a.get('labels',{}).get('group',''),'—') if rule_categories is defined else '—' }}</td>
+          <td>
+            <div style="display:flex;flex-wrap:wrap;gap:4px">
+              {% set labels = a.get('labels',{}) %}
+              {% for key in ['node','instance','stanza','job','sensor_type'] %}
+              {% if labels.get(key) %}
+              <span class="badge badge-ghost badge-mono" style="font-size:9px;padding:1px 5px"><span class="text-muted">{{ key }}=</span>{{ labels.get(key) }}</span>
+              {% endif %}
+              {% endfor %}
+            </div>
+          </td>
+          <td style="font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ a.get('annotations',{}).get('description','—') }}</td>
+          <td style="font-size:11px;font-family:var(--font-mono);color:var(--text-tertiary);white-space:nowrap">{{ a.get('startsAt','—') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-title">Aucune alerte active</div>
+      <p style="font-size:12px;color:var(--text-tertiary);margin-top:4px">Tous les services sont nominaux.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Backup metrics -->
+<div class="card mb-6">
+  <div class="card-header">
+    <h3>
+      <span class="card-icon"><svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg></span>
+      Métriques sauvegarde — Pushgateway
+    </h3>
+    <span class="badge badge-ghost badge-mono">aciertech_backup_*</span>
+  </div>
+  <div class="card-body">
+    <div class="kpi-grid kpi-grid-4">
+      <div class="kpi-card">
+        <div class="kpi-label">Statut vérification</div>
+        <div class="kpi-value" style="font-size:20px">
+          {% if backup_metrics.get('verify_ok') is true %}<span style="color:var(--success)">OK</span>
+          {% elif backup_metrics.get('verify_ok') is false %}<span style="color:var(--danger)">Échec</span>
+          {% else %}<span style="color:var(--text-tertiary)">—</span>{% endif %}
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Statut test</div>
+        <div class="kpi-value" style="font-size:20px">
+          {% if backup_metrics.get('test_ok') is true %}<span style="color:var(--success)">OK</span>
+          {% elif backup_metrics.get('test_ok') is false %}<span style="color:var(--danger)">Échec</span>
+          {% else %}<span style="color:var(--text-tertiary)">—</span>{% endif %}
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Âge FULL</div>
+        <div class="kpi-value" style="font-size:20px">{{ backup_metrics.get('oldest_full_age_hours','—') }}<span class="kpi-unit">h</span></div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Taille dépôt</div>
+        <div class="kpi-value" style="font-size:20px">{{ backup_metrics.get('repo_size_gb','—') }}<span class="kpi-unit">GB</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PG Key Metrics -->
+<div class="card mb-6">
+  <div class="card-header">
+    <h3>
+      <span class="card-icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+      Métriques PostgreSQL clés
+    </h3>
+  </div>
+  <div class="card-body">
+    <div class="kpi-grid kpi-grid-6" id="pgMetricsGrid">
+      {% set pg_cards = [
+        ('Lag réplication', pg_metrics.get('replication_lag_max_s','—'), 's'),
+        ('Cache hit ratio', pg_metrics.get('cache_hit_ratio','—'), '%'),
+        ('Sessions bloquées', pg_metrics.get('sessions_blocked','—'), ''),
+        ('Deadlocks 5m', pg_metrics.get('deadlocks_5m','—'), ''),
+        ('Taux valid. IoT', pg_metrics.get('quality_valid_rate_min','—'), '%'),
+        ('Silencieux crit.', pg_metrics.get('silent_sensors_critical','—'), '')
+      ] %}
+      {% for label, val, unit in pg_cards %}
+      <div class="kpi-card">
+        <div class="kpi-label">{{ label }}</div>
+        <div class="kpi-value" style="font-size:20px">
+          {% if val is not none and val != '—' %}
+            <span class="count-up" data-count="{{ val }}">{{ val }}</span>{% if unit %}<span class="kpi-unit">{{ unit }}</span>{% endif %}
+          {% else %}<span style="color:var(--text-tertiary)">—</span>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<!-- Rules by group -->
+<div class="card">
+  <div class="card-header">
+    <h3>
+      <span class="card-icon"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>
+      Règles par groupe
+    </h3>
+    <span class="badge badge-ghost badge-mono">{{ rules_by_group | length if rules_by_group is defined else '—' }} groupes</span>
+  </div>
+  <div class="card-body">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px">
+      {% if rules_by_group is defined and rules_by_group|length > 0 %}
+        {% for g in rules_by_group %}
+        {% set fc = g.get('firing_count',0) %}
+        <div class="card" style="padding:16px;{% if fc > 0 %}border-color:var(--danger);background:var(--danger-bg){% endif %}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+            <div>
+              <div style="font-size:13px;font-weight:600">{{ g.get('category','—') }}</div>
+              <div style="font-size:10.5px;color:var(--text-tertiary);font-family:var(--font-mono);margin-top:2px">{{ g.get('name','') }}</div>
+            </div>
+            <span class="badge {% if fc > 0 %}badge-err{% else %}badge-ok{% endif %} badge-mono badge-sm">{{ fc }}/{{ g.get('rules',[]) | length }}</span>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px">
+            {% for r in (g.get('rules',[]) | list)[:8] %}
+            <span class="status-dot {% if r.get('state') == 'firing' %}err{% elif r.get('state') == 'pending' %}warn{% else %}ok{% endif %}" style="width:9px;height:9px"></span>
+            {% endfor %}
+            {% if g.get('rules',[]) | length > 8 %}
+            <span style="font-size:10px;color:var(--text-tertiary);margin-left:2px">+{{ g.get('rules',[]) | length - 8 }}</span>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      {% else %}
+      <div class="empty-state" style="grid-column:1/-1"><div class="empty-title">Aucune règle disponible</div></div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function(){
+  async function pollAlerts(){
+    try{
+      const r=await fetch('/api/alerts/active?state=firing');
+      if(!r.ok)return;
+      const d=await r.json();
+      const sev=d.severity_counts||{};
+      document.querySelectorAll('.kpi-grid-4 .kpi-value .count-up').forEach(function(el,i){
+        var vals=[sev.critical,sev.warning,d.pending_count,sev.info];
+        if(i<vals.length&&vals[i]!==undefined){
+          el.textContent=vals[i];
+          el.setAttribute('data-count',vals[i]);
+        }
+      });
+      var badge=document.getElementById('firingBadge');
+      if(d.firing_count>0){
+        badge.textContent=d.firing_count+' en cours';
+        badge.className='badge badge-err badge-lg';
+      }else{
+        badge.textContent='0 en cours';
+        badge.className='badge badge-ok badge-lg';
+      }
+      if(d.alerts&&d.alerts.length>0){
+        var tb=document.getElementById('alertsTableBody');
+        tb.innerHTML=buildAlertsTable(d.alerts);
+      }
+    }catch(e){}
+  }
+  function buildAlertsTable(alerts){
+    if(!alerts.length) return '<div class="empty-state" style="padding:40px"><div class="empty-title">Aucune alerte active</div></div>';
+    var h='<table><thead><tr><th>Sévérité</th><th>Alerte</th><th>Labels</th><th>Description</th><th>Depuis</th></tr></thead><tbody>';
+    for(var a of alerts){
+      var sev=(a.labels&&a.labels.severity||'info').toLowerCase();
+      var labels=Object.entries(a.labels||{}).filter(function(e){return['node','instance','stanza'].includes(e[0])}).map(function(e){return '<span class="badge badge-ghost badge-mono" style="font-size:9px;padding:1px 5px"><span class="text-muted">'+e[0]+'=</span>'+e[1]+'</span>';}).join('');
+      h+='<tr><td><span class="badge '+(sev==='critical'?'badge-err':sev==='warning'?'badge-warn':'badge-info')+' badge-mono badge-sm">'+sev.toUpperCase()+'</span></td><td style="font-weight:600;font-family:var(--font-mono);font-size:12px">'+(a.labels&&a.labels.alertname||'—')+'</td><td>'+labels+'</td><td style="font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(a.annotations&&a.annotations.description||'—')+'</td><td class="text-mono" style="font-size:11px;color:var(--text-tertiary)">'+(a.startsAt||'—')+'</td></tr>';
+    }
+    h+='</tbody></table>';
+    return h;
+  }
+  setInterval(pollAlerts,30000);
+})();
+</script>
+{% endblock %}

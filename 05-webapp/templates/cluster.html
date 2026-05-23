@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% block title %}Cluster — AcierTech{% endblock %}
+{% block page_title %}Statut du cluster{% endblock %}
+{% block page_subtitle %}Patroni HA · {{ cluster_status_text | default('3 nœuds') }}{% endblock %}
+
+{% block topbar_actions %}
+{{ super() }}
+{% if pause_mode is not none and pause_mode %}
+<span class="badge badge-warn badge-lg">Auto-failover en pause</span>
+{% elif pause_mode is not none and not pause_mode %}
+<span class="badge badge-ok badge-lg badge-mono">Auto-failover actif</span>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<!-- Topology -->
+<div class="mb-6">
+  <div style="display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:stretch;gap:8px">
+    {% set _members = members if members is defined else [] %}
+    {% if _members and _members|length > 0 %}
+      {% for m in _members %}
+      {% set is_leader = m.get('role') == 'leader' %}
+      {% set state = m.get('state','unknown') %}
+      <div class="node-card {% if is_leader %}leader{% else %}replica{% endif %}">
+        <div class="node-head">
+          <div>
+            <div class="node-name">{{ m.get('name','—') }}</div>
+            <div style="font-size:10.5px;color:var(--text-tertiary);font-family:var(--font-mono);margin-top:2px">{{ m.get('host','—') }}:5432</div>
+          </div>
+          <span class="node-role {% if is_leader %}leader{% else %}replica{% endif %}">
+            {% if is_leader %}PRIMARY{% else %}REPLICA{% endif %}
+          </span>
+        </div>
+        <div class="node-meta">
+          <div class="meta-item"><span class="m-label">Chrono.</span><span class="m-value">{{ m.get('timeline',1) }}</span></div>
+          <div class="meta-item"><span class="m-label">Port</span><span class="m-value">{% if is_leader %}RW:5000{% else %}RO:5001{% endif %}</span></div>
+          <div class="meta-item"><span class="m-label">Santé</span>
+            <span class="status-dot {% if state == 'running' %}ok{% else %}err{% endif %}"></span>
+          </div>
+          <div class="meta-item"><span class="m-label">Lag</span><span class="m-value">{{ replication_lag_ms | default('0') }}ms</span></div>
+        </div>
+      </div>
+      {% if not loop.last %}
+      <div class="repl-arrow" style="justify-content:center">
+        <svg viewBox="0 0 48 16" style="width:42px;height:14px">
+          <path d="M2 7h36M34 3l10 5-10 5" stroke="var(--text-tertiary)" stroke-width="1.5" fill="none" stroke-dasharray="4 3">
+            <animate attributeName="stroke-dashoffset" from="0" to="14" dur="1.2s" repeatCount="indefinite"/>
+          </path>
+        </svg>
+        <span class="repl-label">WAL</span>
+      </div>
+      {% endif %}
+      {% endfor %}
+    {% else %}
+      {% for i in range(3) %}
+      <div class="node-card replica">
+        <div class="node-head">
+          <div>
+            <div class="node-name" style="color:var(--text-tertiary)">pg-node-{{ i+1 }}</div>
+            <div style="font-size:10.5px;color:var(--text-tertiary);font-family:var(--font-mono);margin-top:2px">—</div>
+          </div>
+          <span class="node-role replica">REPLICA</span>
+        </div>
+        <div class="node-meta">
+          <div class="meta-item"><span class="m-label">Chrono.</span><span class="m-value" style="color:var(--text-tertiary)">—</span></div>
+          <div class="meta-item"><span class="m-label">Port</span><span class="m-value" style="color:var(--text-tertiary)">—</span></div>
+          <div class="meta-item"><span class="m-label">Santé</span><span class="status-dot muted"></span></div>
+          <div class="meta-item"><span class="m-label">Lag</span><span class="m-value" style="color:var(--text-tertiary)">—</span></div>
+        </div>
+      </div>
+      {% if i < 2 %}
+      <div class="repl-arrow" style="justify-content:center"><span class="repl-label" style="color:var(--text-tertiary)">—</span></div>
+      {% endif %}
+      {% endfor %}
+    {% endif %}
+  </div>
+</div>
+
+<!-- Replication table -->
+<div class="card mb-6">
+  <div class="card-header">
+    <h3>
+      <span class="card-icon"><svg viewBox="0 0 24 24"><path d="M4 4v16h16"/><polyline points="20 10 12 18 8 14"/></svg></span>
+      Statut réplication
+    </h3>
+    <span class="badge badge-info badge-mono">{{ replication_rows | length if replication_rows is defined else '—' }} réplicas</span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Réplica</th>
+          <th>État</th>
+          <th>Mode</th>
+          <th>Lag (s)</th>
+          <th>Lag (octets)</th>
+          <th>Sent LSN</th>
+          <th>Replay LSN</th>
+          <th>Niveau</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if replication_rows is defined and replication_rows|length > 0 %}
+          {% for r in replication_rows %}
+          {% set lag_s = r.get('lag_s',0) | float %}
+          <tr>
+            <td><span class="text-mono" style="font-weight:600">{{ r.name | default('—') }}</span></td>
+            <td>
+              <span class="status-dot {{ 'ok' if r.get('state') == 'streaming' else ('err' if r.get('state') == 'disconnected' else 'muted') }}"></span>
+              <span style="font-size:12px;margin-left:4px">{{ r.get('state','—') }}</span>
+            </td>
+            <td><span class="badge badge-ghost badge-mono">{{ r.get('sync_state','async') }}</span></td>
+            <td><span class="text-mono">{{ '%.3f'|format(lag_s) }}s</span></td>
+            <td class="text-mono">{% if r.get('lag_bytes') is not none %}
+              {% set lb = r.lag_bytes | int %}
+              {% if lb > 1073741824 %}{{ '%.2f'|format(lb / 1073741824) }} GB
+              {% elif lb > 1048576 %}{{ '%.1f'|format(lb / 1048576) }} MB
+              {% elif lb > 1024 %}{{ '%.0f'|format(lb / 1024) }} kB
+              {% else %}{{ lb }} B{% endif %}
+              {% else %}—{% endif %}
+            </td>
+            <td class="text-mono">{{ r.get('sent_lsn','—') }}</td>
+            <td class="text-mono">{{ r.get('replay_lsn','—') }}</td>
+            <td>
+              {% set lvl = r.get('lag_level','') %}
+              <span class="badge {% if lvl == 'ok' %}badge-ok{% elif lvl == 'warning' %}badge-warn{% elif lvl == 'critical' %}badge-err{% else %}badge-ghost{% endif %} badge-sm">{{ lvl | upper | default('—') }}</span>
+            </td>
+          </tr>
+          {% endfor %}
+        {% else %}
+        <tr><td colspan="8" style="text-align:center;padding:32px;color:var(--text-tertiary)">Aucune réplication active</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- HAProxy / pgBouncer / etcd -->
+<div class="grid-3 mb-6">
+  <div class="card">
+    <div class="card-header">
+      <h3>
+        <span class="card-icon"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/></svg></span>
+        HAProxy
+      </h3>
+    </div>
+    <div class="card-body">
+      {% set haproxy_ports = [
+        ('RW', '5000', 'Écritures (primaire)'),
+        ('RO', '5001', 'Lectures (réplicas)'),
+        ('Stats', '7000', 'Page stats')
+      ] %}
+      {% for label, port, desc in haproxy_ports %}
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 0;{% if not loop.last %}border-bottom:1px solid var(--border-light){% endif %}">
+        <span class="badge badge-info badge-lg">{{ label }}</span>
+        <div>
+          <div class="text-mono" style="font-weight:600;font-size:14px">{{ port }}</div>
+          <div style="font-size:11px;color:var(--text-tertiary)">{{ desc }}</div>
+        </div>
+        <span class="status-dot ok" style="margin-left:auto"></span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3>
+        <span class="card-icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+        pgBouncer
+      </h3>
+      <span class="badge badge-ghost badge-mono">transaction pool</span>
+    </div>
+    <div class="card-body">
+      {% set pgb_items = [
+        ('Clients actifs', session_summary.get('active', '—') if session_summary is defined else '—'),
+        ('Clients inactifs', session_summary.get('idle', '—') if session_summary is defined else '—'),
+        ('Serveurs actifs', session_summary.get('active', '—') if session_summary is defined else '—'),
+        ('Serveurs inactifs', session_summary.get('idle', '—') if session_summary is defined else '—')
+      ] %}
+      {% for label, val in pgb_items %}
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;{% if not loop.last %}border-bottom:1px solid var(--border-light){% endif %}">
+        <span style="font-size:13px;color:var(--text-secondary)">{{ label }}</span>
+        <span class="text-mono" style="font-weight:600;font-size:18px">{{ val }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3>
+        <span class="card-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
+        etcd — 3 membres
+      </h3>
+    </div>
+    <div class="card-body">
+      {% if etcd_members is defined and etcd_members|length > 0 %}
+        {% for em in etcd_members %}
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 0;{% if not loop.last %}border-bottom:1px solid var(--border-light){% endif %}">
+          <span class="status-dot {% if em.get('ok',false) %}ok{% else %}err{% endif %} pulse"></span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600;font-family:var(--font-mono)">{{ em.get('node','—') }}</div>
+            <div style="font-size:11px;color:var(--text-tertiary)">{{ em.get('host','—') }}:2379</div>
+          </div>
+          <span class="badge {% if em.get('role') == 'LEADER' %}badge-orange{% else %}badge-ghost{% endif %} badge-mono">{{ em.get('role','—') }}</span>
+        </div>
+        {% endfor %}
+      {% else %}
+      <div class="empty-state"><div class="empty-title">Données etcd indisponibles</div></div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Grafana -->
+<div class="iframe-wrap">
+  <div class="iframe-header">
+    <h3>Grafana — Cluster & Réplication</h3>
+    <span class="refresh-indicator" style="margin-left:auto">Rafraîchissement 30s</span>
+  </div>
+  <iframe src="{{ grafana_cluster_url | default(grafana_iframe_url(grafana_uid_cluster)) }}" height="460" frameborder="0" loading="lazy" title="Grafana Cluster"></iframe>
+</div>
+{% endblock %}
