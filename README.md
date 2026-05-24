@@ -31,38 +31,63 @@
 
 ## Lancement rapide (Docker Compose — Windows & Linux)
 
-La façon la plus simple de démarrer est via la stack Docker Compose dans `05-webapp/`.  
-Tout est pré-intégré : PostgreSQL + mock-serveur + Grafana + console web.
+La stack Docker Compose pré-intègre tout : **PostgreSQL 16 + mock-serveur + Grafana + console web**.  
+Aucune installation manuelle de PostgreSQL, Patroni, Prometheus ou Grafana n'est nécessaire.
 
 ### Prérequis
 
-- **Docker Desktop** (WSL2 backend recommandé sur Windows)
-- **Git**
+- [Docker Desktop](https://docs.docker.com/desktop/) (WSL2 backend sur Windows)
+- [Git](https://git-scm.com/)
 
-### Étapes
+### Étapes (Windows & Linux identiques)
 
 ```bash
-# 1. Cloner le dépôt
+# 1. Cloner le dépôt (GitHub token non requis pour le clone)
 git clone https://github.com/AngeloEngineer/aciertech-dba-platform.git
 cd aciertech-dba-platform/05-webapp
 
-# 2. Copier les variables d'environnement
-cp .env.example docker/.env
-
-# 3. Lancer la stack complète
+# 2. Lancer la stack (le fichier docker/.env est déjà pré-configuré)
 docker compose up -d --build
 ```
 
+> ⚠️ **Ne pas copier `.env.example` vers `docker/.env`** — le `docker/.env` fourni dans le dépôt contient déjà les bonnes valeurs pour l'exécution sous Docker. Le `.env.example` est réservé à un déploiement natif sans Docker.
+
 ### Accès
 
-| Service     | URL                          |
-|-------------|------------------------------|
-| Webapp DBA  | http://localhost:8080        |
-| Grafana     | http://localhost:3000        |
+| Service          | URL                          | Identifiant              |
+|------------------|------------------------------|--------------------------|
+| Console DBA      | http://localhost:8080        | —                        |
+| Grafana          | http://localhost:3000        | `admin / admin`          |
 
-Grafana : `admin / admin`
+> Les graphiques Grafana sont intégrés **directement** dans chaque page de la console DBA. Pas besoin d'aller sur Grafana séparément.
 
-> **Note pour Windows** : Le fichier `.gitattributes` force les fins de ligne LF pour les scripts shell, évitant les erreurs sous conteneur Linux.
+### Vérification
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080    # → 200
+```
+
+### Pipeline Data-to-Model (optionnel)
+
+Le pipeline d'exposition IA se lance avec un fichier Compose supplémentaire :
+
+```bash
+docker compose -f docker-compose.yml -f ../06-pipeline/docker-compose.pipeline.yml up -d --build
+```
+
+### Redémarrage après reboot
+
+```bash
+cd ~/aciertech-dba-platform/05-webapp && docker compose up -d
+```
+
+### Arrêt
+
+```bash
+docker compose down
+# Pour tout supprimer (volumes inclus — perd les données)
+docker compose down -v
+```
 
 ## Structure du projet
 
