@@ -128,12 +128,14 @@ class Settings(BaseSettings):
     # ── Grafana ───────────────────────────────────────────────────────────────
     # allow_embedding=true, auth.anonymous enabled=true (grafana.ini 04-monitoring)
     # UIDs des dashboards (définis dans les JSON 04-monitoring/grafana/dashboards/) :
-    #   aciertech-cluster-ha    → cluster.html
-    #   aciertech-pg-performance → dashboard.html
+    #   aciertech-cluster-ha    → cluster.html, failover.html
+    #   aciertech-pg-performance → dashboard.html, pipeline.html
     #   aciertech-data-quality  → quality.html
     #   aciertech-pra-backups   → backups.html
-    grafana_host: str = "monitoring-server"
+    grafana_host: str = "monitoring-server"     # Hôte interne Docker (pour le serveur)
     grafana_port: int = 3000
+    grafana_external_host: str = "localhost"    # Hôte externe navigateur (pour iframes)
+    grafana_external_port: int = 3000
     grafana_org_id: int = 1
     grafana_refresh_interval: str = "30s"
     grafana_theme: str = "light"
@@ -281,11 +283,16 @@ class Settings(BaseSettings):
 
     def grafana_iframe_url(self, uid: str, extra_params: str = "") -> str:
         """
-        URL d'embedding Grafana (auth.anonymous=true, allow_embedding=true
-        configurés dans 04-monitoring/grafana/grafana.ini).
+        URL d'embedding Grafana pour le navigateur (auth.anonymous=true,
+        allow_embedding=true configurés dans 04-monitoring/grafana/grafana.ini).
+
+        Utilise grafana_external_host (défaut: localhost) car le navigateur
+        ne peut pas résoudre les noms d'hôte Docker-internes.
+        Les appels serveur vers Grafana utilisent grafana_host (Docker-internal).
         """
+        base_url = f"http://{self.grafana_external_host}:{self.grafana_external_port}"
         base = (
-            f"{self.grafana_base_url}/d/{uid}"
+            f"{base_url}/d/{uid}"
             f"?orgId={self.grafana_org_id}"
             f"&kiosk"
             f"&refresh={self.grafana_refresh_interval}"

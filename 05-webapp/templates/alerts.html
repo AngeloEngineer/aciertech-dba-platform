@@ -209,6 +209,19 @@
     </div>
   </div>
 </div>
+<!-- Grafana — Vue synthèse des alertes -->
+<div class="card mb-5">
+  <div class="card-header">
+    <h3>
+      <span class="status-dot info pulse"></span>
+      Grafana — Performance & Alertes
+    </h3>
+    <span class="badge badge-info badge-mono">30s</span>
+  </div>
+  <div class="card-body" style="padding:0">
+    <iframe src="{{ grafana_iframe_url(grafana_uid_perf) }}" width="100%" height="400" frameborder="0" style="display:block" title="Grafana Performance & Alertes"></iframe>
+  </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}

@@ -47,7 +47,7 @@ async def pipeline_page(request: Request):
         "coverage": coverage or [],
         "grafana_pipeline_url": settings.grafana_iframe_url(
             "aciertech-pg-performance",
-            "&var-metric=aciertech_ai_view_refresh"
+            "var-metric=aciertech_ai_view_refresh"
         ),
     }
     return templates.TemplateResponse("pipeline.html", ctx)
