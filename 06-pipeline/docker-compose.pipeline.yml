@@ -1,0 +1,50 @@
+# =============================================================================
+# docker-compose.pipeline.yml — Pipeline Data-to-Model (services additionnels)
+#
+# Ce fichier est à utiliser EN COMPLÉMENT de 05-webapp/docker-compose.yml.
+# Lance les 2 services du pipeline : exposition API + worker refresh.
+#
+# Usage :
+#   docker compose -f 05-webapp/docker-compose.yml \
+#                 -f 06-pipeline/docker-compose.pipeline.yml \
+#                 up -d --build
+# =============================================================================
+version: "3.8"
+
+services:
+  # ── Exposition API (port 8100) ─────────────────────────────────────────────
+  # Point d'entrée pour le système IA de maintenance prédictive.
+  pipeline-api:
+    build:
+      context: ./06-pipeline/exposition
+      dockerfile: Dockerfile
+    container_name: pipeline-api
+    ports:
+      - "8100:8100"
+    environment:
+      PG_DSN: "postgresql://aciertech_ro:${PG_PASSWORD_RO:-aciertech_ro}@pg-node-1:5001/aciertech_db"
+      LOG_LEVEL: info
+    networks:
+      - aciertech
+    depends_on:
+      webapp:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── Worker refresh (démon) ─────────────────────────────────────────────────
+  # Rafraîchit iot_clean.v_ai_feature_set toutes les 5 minutes.
+  # Filet de sécurité si pg_cron n'est pas disponible.
+  pipeline-worker:
+    build:
+      context: ./06-pipeline/worker
+      dockerfile: Dockerfile
+    container_name: pipeline-worker
+    environment:
+      PG_DSN: "postgresql://postgres:${PG_PASSWORD_ADMIN:-postgres}@pg-node-1:5000/aciertech_db"
+      LOG_LEVEL: info
+    networks:
+      - aciertech
+    depends_on:
+      webapp:
+        condition: service_started
+    restart: unless-stopped

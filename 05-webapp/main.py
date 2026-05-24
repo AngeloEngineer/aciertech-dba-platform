@@ -27,7 +27,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from config import settings
 from db import close_pools, db_health_check, fetchall_ro, fetchone_ro, init_pools
-from routers import alerts, backups, cluster, disaster, quality
+from routers import alerts, backups, cluster, disaster, pipeline, quality
 from tpl import templates
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -129,6 +129,7 @@ app.include_router(quality.router)
 app.include_router(backups.router)
 app.include_router(alerts.router)
 app.include_router(disaster.router)
+app.include_router(pipeline.router)
 
 
 # ── Helper : récupère le statut cluster via Patroni (pour le contexte global) ─

@@ -1,0 +1,329 @@
+{% extends "base.html" %}
+{% set page_title = "Pipeline Data-to-Model" %}
+{% set page_subtitle = "Feature set agrégé pour le système IA de maintenance prédictive" %}
+
+{% block page_title %}Data-to-Model{% endblock %}
+{% block page_subtitle %}Pipeline d'exposition des features agrégés pour le système IA{% endblock %}
+
+{% block content %}
+
+<!-- KPIs -->
+<div class="kpi-grid kpi-grid-5 mb-5">
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--accent)"></div>
+    <div class="kpi-top">
+      <div class="kpi-label">Buckets feature</div>
+    </div>
+    <div class="kpi-value"><span class="count-up" data-count="{{ feature_summary.total_buckets or 0 }}">{{ feature_summary.total_buckets or 0 }}</span></div>
+    <div class="kpi-meta">fenêtre glissante 24h</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--success)"></div>
+    <div class="kpi-top">
+      <div class="kpi-label">Capteurs actifs</div>
+    </div>
+    <div class="kpi-value"><span class="count-up" data-count="{{ feature_summary.distinct_sensors or 0 }}">{{ feature_summary.distinct_sensors or 0 }}</span><span class="kpi-unit">/ 47</span></div>
+    <div class="kpi-meta">types: {{ feature_summary.distinct_types or 0 }}</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--violet)"></div>
+    <div class="kpi-top">
+      <div class="kpi-label">Qualité moyenne</div>
+    </div>
+    <div class="kpi-value">{{ feature_summary.global_avg_quality or '—' }}<span class="kpi-unit">/100</span></div>
+    <div class="kpi-meta">score qualité des features</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--warning)"></div>
+    <div class="kpi-top">
+      <div class="kpi-label">Rendement pipeline</div>
+    </div>
+    <div class="kpi-value">{{ kpis.pipeline_yield_pct or '—' }}<span class="kpi-unit">%</span></div>
+    <div class="kpi-meta">clean / raw (1h)</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-accent" style="background:var(--orange)"></div>
+    <div class="kpi-top">
+      <div class="kpi-label">Rejetées (1h)</div>
+    </div>
+    <div class="kpi-value"><span class="count-up" data-count="{{ kpis.rejected_1h or 0 }}">{{ kpis.rejected_1h or 0 }}</span></div>
+    <div class="kpi-meta">données en quarantaine</div>
+  </div>
+</div>
+
+<!-- Pipeline Flow Diagram -->
+<div class="card mb-5">
+  <div class="card-header">
+    <h3><span class="card-icon"><svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></svg></span> Flux du pipeline Data-to-Model</h3>
+  </div>
+  <div class="card-body">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:8px 0">
+      <div style="text-align:center;flex:1;min-width:100px">
+        <div style="background:var(--info-bg);border-radius:var(--radius-md);padding:12px 8px;border:1px solid var(--border)">
+          <div style="font-size:24px;margin-bottom:4px">📡</div>
+          <div style="font-size:12px;font-weight:600;color:var(--accent)">47 Capteurs IoT</div>
+          <div style="font-size:10px;color:var(--text-tertiary)">iot_raw.sensor_readings</div>
+        </div>
+      </div>
+      <div style="font-size:20px;color:var(--text-tertiary)">→</div>
+      <div style="text-align:center;flex:1;min-width:100px">
+        <div style="background:var(--success-bg);border-radius:var(--radius-md);padding:12px 8px;border:1px solid var(--border)">
+          <div style="font-size:24px;margin-bottom:4px">✅</div>
+          <div style="font-size:12px;font-weight:600;color:var(--success)">Validation (score ≥ 70)</div>
+          <div style="font-size:10px;color:var(--text-tertiary)">trigger trg_validate_sensor</div>
+        </div>
+      </div>
+      <div style="font-size:20px;color:var(--text-tertiary)">→</div>
+      <div style="text-align:center;flex:1;min-width:100px">
+        <div style="background:var(--violet-bg);border-radius:var(--radius-md);padding:12px 8px;border:1px solid var(--border)">
+          <div style="font-size:24px;margin-bottom:4px">📊</div>
+          <div style="font-size:12px;font-weight:600;color:var(--violet)">Agrégation minute</div>
+          <div style="font-size:10px;color:var(--text-tertiary)">v_ai_feature_set</div>
+        </div>
+      </div>
+      <div style="font-size:20px;color:var(--text-tertiary)">→</div>
+      <div style="text-align:center;flex:1;min-width:100px">
+        <div style="background:var(--warning-bg);border-radius:var(--radius-md);padding:12px 8px;border:1px solid var(--border)">
+          <div style="font-size:24px;margin-bottom:4px">🤖</div>
+          <div style="font-size:12px;font-weight:600;color:var(--warning)">IA Maintenance</div>
+          <div style="font-size:10px;color:var(--text-tertiary)">API /api/v1/features</div>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-top:12px;font-size:11px;color:var(--text-tertiary)">
+      <span>⏱ Refresh toutes les 5 min (CONCURRENTLY)</span>
+      <span>•</span>
+      <span>📅 Fenêtre 24h glissante</span>
+      <span>•</span>
+      <span>🔒 Lecture seule pour l'IA</span>
+    </div>
+  </div>
+</div>
+
+<!-- Grid : Vue matérialisée + Refresh history -->
+<div class="grid-65-35 mb-5">
+  <!-- Vue matérialisée status -->
+  <div class="card">
+    <div class="card-header">
+      <h3><span class="card-icon"><svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg></span> iot_clean.v_ai_feature_set</h3>
+      <button class="btn btn-sm btn-primary" onclick="refreshPipeline()" id="refreshBtn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        Actualiser
+      </button>
+    </div>
+    <div class="card-body">
+      {% if feature_summary %}
+      <div class="grid-2" style="margin-bottom:14px">
+        <div>
+          <div class="text-xs text-muted">Plus ancien bucket</div>
+          <div class="text-sm mono">{{ feature_summary.oldest_bucket or '—' }}</div>
+        </div>
+        <div>
+          <div class="text-xs text-muted">Plus récent bucket</div>
+          <div class="text-sm mono">{{ feature_summary.newest_bucket or '—' }}</div>
+        </div>
+      </div>
+      <div class="progress mb-3" style="height:8px">
+        {% set pct = 100 if feature_summary.distinct_sensors and feature_summary.distinct_sensors >= 47 else (feature_summary.distinct_sensors or 0) / 47 * 100 %}
+        <div class="bar {{ 'green' if pct >= 90 else 'yellow' if pct >= 70 else 'red' }}" style="width:{{ pct }}%"></div>
+      </div>
+      <div class="flex-between text-xs text-muted">
+        <span>Couverture capteurs : {{ feature_summary.distinct_sensors or 0 }} / 47 ({{ '%.0f'|format(pct) }}%)</span>
+        <span>Score qualité global : {{ feature_summary.global_avg_quality or '—' }}/100</span>
+      </div>
+      {% else %}
+      <div class="text-center text-muted" style="padding:20px">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-bottom:8px;opacity:.3"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+        <div>La vue matérialisée est vide ou non rafraîchie.</div>
+        <div class="text-xs" style="margin-top:4px">Exécuter le générateur de données ou cliquer sur Actualiser.</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Refresh history -->
+  <div class="card">
+    <div class="card-header">
+      <h3><span class="card-icon"><svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg></span> Historique refresh</h3>
+    </div>
+    <div class="card-body" style="padding:0">
+      {% if refresh_history %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Statut</th>
+              <th>Début</th>
+              <th>Durée</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in refresh_history %}
+            <tr>
+              <td>
+                <span class="badge badge-sm {{ 'badge-ok' if r.status == 'succeeded' else 'badge-err' }}">
+                  {{ 'Succès' if r.status == 'succeeded' else r.status }}
+                </span>
+              </td>
+              <td class="mono text-sm">{{ r.started_at.strftime('%H:%M:%S') if r.started_at else '—' }}</td>
+              <td class="mono text-sm">{{ r.duration_s or '—' }}s</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="text-center text-muted" style="padding:20px">
+        <div style="font-size:11px">Aucun historique disponible</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Coverage & Volume -->
+<div class="grid-2 mb-5">
+  <div class="card">
+    <div class="card-header">
+      <h3><span class="card-icon"><svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></span> Couverture par type de capteur</h3>
+    </div>
+    <div class="card-body" style="padding:0">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Total</th>
+              <th>Actifs dans features</th>
+              <th>Couverture</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for c in coverage %}
+            <tr>
+              <td><span class="badge badge-info">{{ c.sensor_type }}</span></td>
+              <td class="mono">{{ c.total_sensors }}</td>
+              <td class="mono">{{ c.active_in_features }}</td>
+              <td>
+                <span class="badge {{ 'badge-ok' if c.coverage_pct >= 90 else 'badge-warn' if c.coverage_pct >= 70 else 'badge-err' }}">
+                  {{ c.coverage_pct }}%
+                </span>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="text-center text-muted">Aucune donnée de couverture</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h3><span class="card-icon"><svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2"/></svg></span> Volume pipeline</h3>
+    </div>
+    <div class="card-body">
+      <div class="kpi-grid kpi-grid-2" style="margin-bottom:14px">
+        <div>
+          <div class="text-xs text-muted">Lecture nettoyées (1h)</div>
+          <div class="mono" style="font-size:20px;font-weight:600">{{ kpis.readings_1h or 0 }}</div>
+        </div>
+        <div>
+          <div class="text-xs text-muted">Lecture nettoyées (24h)</div>
+          <div class="mono" style="font-size:20px;font-weight:600">{{ kpis.readings_24h or 0 }}</div>
+        </div>
+      </div>
+      <div style="background:var(--bg-input);border-radius:var(--radius-md);padding:12px;margin-bottom:10px">
+        <div class="flex-between text-sm" style="margin-bottom:4px">
+          <span>Rendement pipeline</span>
+          <span class="mono">{{ kpis.pipeline_yield_pct or '—' }}%</span>
+        </div>
+        <div class="progress">
+          {% set yield_val = kpis.pipeline_yield_pct | float %}
+          <div class="bar {{ 'green' if yield_val >= 88 else 'yellow' if yield_val >= 70 else 'red' }}" style="width:{{ yield_val if yield_val <= 100 else 100 }}%"></div>
+        </div>
+        <div class="text-xs text-muted" style="margin-top:4px">
+          Ratio lectures validées / lectures brutes
+        </div>
+      </div>
+      <div class="text-xs text-muted" style="text-align:center">
+        <span>📌 Le rendement cible est ≥ 88% (contre 88% avant projet, objectif 95%)</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- API Exposition -->
+<div class="card mb-5">
+  <div class="card-header">
+    <h3><span class="card-icon"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg></span> Exposition API — Système IA</h3>
+    <span class="badge badge-info">Lecture seule</span>
+  </div>
+  <div class="card-body">
+    <div class="grid-3" style="margin-bottom:12px">
+      <div style="background:var(--bg-input);border-radius:var(--radius-md);padding:12px">
+        <div class="text-xs text-muted" style="margin-bottom:3px">GET /api/v1/features</div>
+        <div class="text-sm mono" style="color:var(--accent)">Feature set complet</div>
+        <div class="text-xs text-muted" style="margin-top:3px">Paramètres : sensor_id, sensor_type, since_minutes, limit</div>
+      </div>
+      <div style="background:var(--bg-input);border-radius:var(--radius-md);padding:12px">
+        <div class="text-xs text-muted" style="margin-bottom:3px">GET /api/v1/features/{id}</div>
+        <div class="text-sm mono" style="color:var(--accent)">Features d'un capteur</div>
+        <div class="text-xs text-muted" style="margin-top:3px">Fenêtre 2h par défaut</div>
+      </div>
+      <div style="background:var(--bg-input);border-radius:var(--radius-md);padding:12px">
+        <div class="text-xs text-muted" style="margin-bottom:3px">GET /api/v1/summary</div>
+        <div class="text-sm mono" style="color:var(--accent)">Résumé global</div>
+        <div class="text-xs text-muted" style="margin-top:3px">Buckets, capteurs distincts, qualité</div>
+      </div>
+    </div>
+    <div class="flex-between text-xs text-muted">
+      <span>📡 Serveur d'exposition dédié : port 8100 (docker)</span>
+      <span>⏱ Refresh toutes les 5 minutes via pg_cron ou worker</span>
+      <span>🔗 Rôle aciertech_ro — SELECT uniquement</span>
+    </div>
+  </div>
+</div>
+
+<!-- Grafana iframe -->
+<div class="card">
+  <div class="card-header">
+    <h3><span class="card-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span> Monitoring Grafana — Refresh pipeline</h3>
+  </div>
+  <div class="card-body" style="padding:0">
+    <iframe src="{{ grafana_pipeline_url }}" width="100%" height="400" frameborder="0" style="display:block" title="Grafana Pipeline"></iframe>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+async function refreshPipeline() {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg> Rafraîchissement...';
+  try {
+    const r = await fetch('/api/pipeline/refresh', { method: 'POST' });
+    const d = await r.json();
+    if (d.success) {
+      showToast('Rafraîchissement terminé en ' + d.duration_s + 's', 'success');
+      setTimeout(() => window.location.reload(), 1500);
+    } else {
+      showToast('Erreur : ' + (d.detail || 'inconnue'), 'error');
+      btn.disabled = false;
+      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg> Actualiser';
+    }
+  } catch (e) {
+    showToast('Erreur réseau : ' + e.message, 'error');
+    btn.disabled = false;
+    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg> Actualiser';
+  }
+}
+</script>
+<style>
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.spin{animation:spin 1s linear infinite}
+</style>
+{% endblock %}
